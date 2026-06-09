@@ -690,3 +690,59 @@ body,
   .container > section,
   .container > footer { animation: none; }
 }
+
+/* ── CFPB 5문항 설문 ── */
+.cfpb-intro {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-strong);
+  margin: 4px 0 10px;
+  padding: 8px 12px;
+  background: var(--brand-soft);
+  border-radius: 10px;
+}
+.cfpb-q {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--border);
+}
+.cfpb-q:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+.cfpb-q-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-body);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+.cfpb-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cfpb-opt {
+  border: 1.5px solid var(--border);
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-mute);
+  text-align: left;
+  cursor: pointer;
+  transition: 0.12s;
+  font-family: inherit;
+}
+.cfpb-opt:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+.cfpb-opt.on {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 700;
+}

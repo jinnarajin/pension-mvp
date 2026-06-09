@@ -51,24 +51,49 @@ class CashflowSnapshot:
 
 
 @dataclass
+class CFPBInput:
+    """[3] CFPB administrator 입력 — 프론트에서 받은 5문항 응답."""
+    answers: dict               # {"q3":"not_at_all", ...} 5개 키 필수
+    age: int                    # 만 나이 (62세 컷오프 그룹 결정)
+    mode: Literal["self", "other"] = "self"
+    translation_validated: bool = False
+
+
+@dataclass
 class RoutingResult:
-    """[3] Question Routing Agent"""
-    intent: Literal[
-        "연금조회", "갈아타기", "세제혜택",
-        "수익률", "부족액", "일반상담"
-    ]
-    sub_questions: list[str]    # 분해된 세부 질문들
-    required_agents: list[str]  # 필요한 하위 에이전트 목록
+    """[3] Question Routing Agent — CFPB 약식 5문항 administrator + 결정론 채점.
+
+    intent 등은 호환을 위해 남겨두지만, 핵심 결과는 fwb_score 등이다.
+    """
+    fwb_score: int              # 0~100, IRT 룩업으로 산출
+    raw_total: int              # 0~20
+    group: str                  # "62_plus_self" 등
+    using_official_lookup: bool
+    translation_validated: bool
+    intent: str = "cfpb_fwb"
+    sub_questions: list = field(default_factory=list)
+    required_agents: list = field(default_factory=list)
 
 
 @dataclass
 class PersonaClassification:
-    """[4] Evidence-based Persona Classifier"""
-    vulnerability_score: int    # 0~100
-    persona_label: str          # "은퇴임박 안정형", "고위험 노출" 등
+    """[4] Evidence-based Persona Classifier — Vulnerability Analyzer.
+
+    CFPB 주관 점수(S_sub) + 마이데이터 객관 지표(S_obj)를 결합해 UVS·tier 산출.
+    """
+    vulnerability_score: int    # = uvs (0~100). 기존 호환 위해 이름 유지.
+    persona_label: str
     flags: list[str]
     needs_human_review: bool
-    evidence: dict              # 각 지표별 근거값
+    evidence: dict              # {S_sub, S_obj, fwb_score, ...}
+    # — Vulnerability Analyzer 추가 필드 —
+    uvs: int = 0
+    tier: Literal["주의", "경고", "위기"] = "주의"
+    downstream_action: str = "ui_simple_home"
+    fwb_confidence: Literal["indicative", "validated"] = "indicative"
+    amplification_triggered: bool = False
+    driver_attribution: dict = field(default_factory=dict)
+    rationale: str = ""
 
 
 @dataclass
@@ -119,6 +144,7 @@ class AgentState(TypedDict):
     customer_id: str
     query: str
     mydata_raw: Optional[dict]              # 원본 마이데이터 (JSON)
+    cfpb_input: Optional[CFPBInput]         # CFPB 5문항 응답 (프론트에서 받음)
 
     # Orchestration 분기
     feature_change: Optional[FeatureChangeResult]

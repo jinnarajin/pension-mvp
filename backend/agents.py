@@ -19,6 +19,10 @@ from state import (
 )
 from mydata_schema import MyDataInput
 from calculations import calculate_all_metrics
+from cfpb_fwb_scorer import (
+    score_cfpb_fwb_abbreviated,
+    USING_OFFICIAL_LOOKUP,
+)
 
 load_dotenv()
 
@@ -208,88 +212,206 @@ def supervisor_agent_check(state: AgentState) -> AgentState:
 
 
 # ══════════════════════════════════════════════════════════
-# [3] Question Routing Agent
+# [3] CFPB Administrator — 5문항 응답을 결정론적으로 채점
+# (기존 Question Routing Agent 대체. 함수 이름은 graph.py 호환을 위해 유지.)
 # ══════════════════════════════════════════════════════════
 
 def question_routing_agent(state: AgentState) -> AgentState:
     """
-    사용자 질문 의도를 분류하고 필요한 Agent를 결정합니다.
-    Claude API로 의도 분류 → 세부 질문 분해.
+    프론트에서 받은 CFPB 약식 5문항 응답을 cfpb_fwb_scorer로 채점합니다.
+    LLM 호출 없음 — 점수는 IRT 룩업표에서 결정론적으로 나옵니다.
+
+    cfpb_input이 비어있으면 (오프라인/스킵 시나리오) fwb_score=50 인 기본값을
+    설정해 후속 분석은 진행됨. 호출자가 명시적으로 CFPB를 제공한 경우에만
+    실제 점수가 들어갑니다.
     """
-    query = state["query"]
-    prompt = f"""
-사용자 연금 상담 질문을 분석하고 JSON으로만 응답하세요.
+    cfpb = state.get("cfpb_input")
 
-질문: "{query}"
+    if cfpb is None:
+        # 기본 중간값 — 마이데이터 객관 지표만으로 분석 계속
+        result = RoutingResult(
+            fwb_score=50, raw_total=10, group="unknown_self",
+            using_official_lookup=USING_OFFICIAL_LOOKUP,
+            translation_validated=False,
+            intent="cfpb_skipped",
+        )
+        print("[3] CFPB skipped — 기본 fwb_score=50 사용")
+        return {**state, "routing": result}
 
-intent 선택지: 연금조회 | 갈아타기 | 세제혜택 | 수익률 | 부족액 | 일반상담
+    try:
+        scored = score_cfpb_fwb_abbreviated(
+            answers=cfpb.answers,
+            age=cfpb.age,
+            mode=cfpb.mode,
+        )
+    except (ValueError, RuntimeError) as e:
+        return {**state, "error": f"[3] CFPB 채점 오류: {e}"}
 
-응답 JSON:
-{{
-  "intent": "선택된 의도",
-  "sub_questions": ["세부질문1", "세부질문2"],
-  "required_agents": ["persona_classifier", "cashflow_calc"]
-}}
-"""
-    d = _llm(prompt, 400)
     result = RoutingResult(
-        intent=d["intent"],
-        sub_questions=d["sub_questions"],
-        required_agents=d["required_agents"]
+        fwb_score=scored["fwb_score"],
+        raw_total=scored["raw_total"],
+        group=scored["group"],
+        using_official_lookup=scored["using_official_lookup"],
+        translation_validated=cfpb.translation_validated,
+        intent="cfpb_fwb",
     )
-    print(f"[3] Routing — intent: {result.intent}")
+    print(f"[3] CFPB 채점 — fwb_score: {result.fwb_score} (raw={result.raw_total}, group={result.group})")
     return {**state, "routing": result}
 
 
 # ══════════════════════════════════════════════════════════
-# [4] Evidence-based Persona Classifier
+# [4] Vulnerability Analyzer — CFPB 주관 + 마이데이터 객관 → UVS·tier
+# (기존 Persona Classifier 대체. 함수 이름은 graph.py 호환을 위해 유지.)
 # ══════════════════════════════════════════════════════════
+
+# 가중치 — 운영 데이터로 보정 대상
+W_SUB_OBJ_ALPHA = 0.5         # S_sub 비중
+W_SUB_OBJ_BETA  = 0.5         # S_obj 비중
+W_RUNWAY        = 0.5         # 생존여력 가중
+W_DSR           = 0.3         # DSR 가중
+W_PENSION       = 0.2         # 연금대체율 가중
+OVERLAP_PENALTY = 0.15        # 다차원 결합 위험 트리거당 증폭
+ABBREV_BUFFER   = 5           # 약식 척도 컷오프 완화(%p)
+
+
+def _normalize_obj(features: dict, profile_age: int) -> tuple[float, dict]:
+    """마이데이터 객관 지표 → S_obj (0~1) + 정규화 컴포넌트 dict 반환."""
+    # S_runway: 6개월 이상=0, 1개월 이하=1, 선형
+    survival = features.get("survival_months_now", 0)
+    s_runway = max(0.0, min(1.0, (6 - survival) / 5))
+
+    # S_dsr: 40% 이상=1, 0%=0
+    dsr = features.get("dsr_now", 0)
+    s_dsr = max(0.0, min(1.0, dsr / 40))
+
+    # S_pension: 연금대체율 100% 이상=0, 0%=1 (낮을수록 취약)
+    # rr_full을 대표 지표로 사용
+    rr = features.get("rr_full", 0)
+    s_pension = max(0.0, min(1.0, (70 - rr) / 70)) if rr is not None else 0.5
+
+    s_obj = W_RUNWAY * s_runway + W_DSR * s_dsr + W_PENSION * s_pension
+    return s_obj, {"s_runway": s_runway, "s_dsr": s_dsr, "s_pension": s_pension}
+
+
+def _check_amplification(profile_age: int, s_sub: float, features: dict) -> tuple[int, list[str]]:
+    """다차원 결합 위험 트리거 카운트 + 사유 목록."""
+    triggers = []
+    if profile_age >= 65 and s_sub > 0.6:
+        triggers.append("age65+_high_subjective_vuln")
+    if features.get("survival_months_now", 99) < 3:
+        triggers.append("liquidity_runway<3m")
+    if features.get("income_gap_years", 0) > 0 and s_sub > 0.5:
+        triggers.append("income_gap+subjective_vuln")
+    if features.get("dsr_now", 0) >= 40:
+        triggers.append("dsr>=40")
+    return len(triggers), triggers
+
 
 def persona_classifier(state: AgentState) -> AgentState:
     """
-    Supervisor Agent가 보강한 피처 + 마이데이터 기반으로
-    취약성 점수 및 페르소나를 분류합니다.
-    추출된 변수와 유저 추가정보를 통한 페르소나 분류.
+    Vulnerability Analyzer.
+    입력: CFPB fwb_score (routing) + 마이데이터 객관 지표 (cashflow_snapshot).
+    산출: UVS (0~100), tier (주의/경고/위기), downstream_action, 드라이버 귀인.
+    LLM은 사용하지 않습니다 — 결정론적 규칙.
     """
-    features = state["cashflow_snapshot"].extracted_features
-    profile  = state["data_mapping"].mydata.profile
-    anomalies = features.get("supervisor_anomalies", [])
+    routing = state.get("routing")
+    snapshot = state.get("cashflow_snapshot")
+    data_mapping = state.get("data_mapping")
+    if routing is None or snapshot is None or data_mapping is None:
+        return {**state, "error": "[4] Vulnerability Analyzer 입력 누락"}
 
-    prompt = f"""
-연금 취약성 진단 전문가입니다. 아래 데이터를 분석하고 JSON으로만 응답하세요.
+    features = snapshot.extracted_features
+    profile = data_mapping.mydata.profile
+    fwb_score = routing.fwb_score
 
-[프로필]
-나이: {profile.age}세 / 직군: {profile.job_type} / 은퇴까지: {profile.years_to_retire}년
-핵심불안: {profile.core_anxiety}
+    # ── 1. 주관 취약 S_sub ──────────────────────────────
+    s_sub = (100 - fwb_score) / 100
 
-[계산된 지표]
-RR_gap: {features.get("rr_gap", "N/A")}%
-은퇴 후 생존여력: {features.get("survival_months_retire", "N/A")}개월
-DSR 은퇴 후: {features.get("dsr_retire", "N/A")}%
-포트폴리오 괴리도: {features.get("portfolio_deviation", "N/A")}%p
-갈아타기 점수: {features.get("switch_score", "N/A")}점
+    # ── 2. 객관 취약 S_obj ──────────────────────────────
+    s_obj, obj_comp = _normalize_obj(features, profile.age)
 
-[Supervisor 이상 감지]
-{anomalies if anomalies else "없음"}
+    # ── 3. 결합 + 비선형 증폭 ────────────────────────────
+    base = W_SUB_OBJ_ALPHA * s_sub + W_SUB_OBJ_BETA * s_obj
+    k, trigger_reasons = _check_amplification(profile.age, s_sub, features)
+    amplification = 1 + min(1.0, k * OVERLAP_PENALTY)
+    uvs_float = min(1.0, base * amplification) if amplification > 1 else base
+    uvs = round(uvs_float * 100)
 
-응답 JSON:
-{{
-  "vulnerability_score": 0~100 정수,
-  "persona_label": "페르소나 한 줄 요약",
-  "flags": ["플래그1", "플래그2"],
-  "needs_human_review": true/false,
-  "evidence": {{"rr_gap": 값, "survival": 값}}
-}}
-"""
-    d = _llm(prompt, 500)
-    result = PersonaClassification(
-        vulnerability_score=d["vulnerability_score"],
-        persona_label=d["persona_label"],
-        flags=d["flags"],
-        needs_human_review=d["needs_human_review"],
-        evidence=d["evidence"]
+    # ── 4. tier 분류 (약식 척도 버퍼 반영) ──────────────
+    # 컷오프를 ABBREV_BUFFER만큼 완화 (취약 과대분류 방지)
+    if uvs < (40 - ABBREV_BUFFER):
+        tier, action = "주의", "ui_simple_home"
+    elif uvs < (70 - ABBREV_BUFFER):
+        tier, action = "경고", "deliberation_period + proxy_sms"
+    else:
+        tier, action = "위기", "fds_block + senior_specialist_call"
+
+    needs_review = tier in ("경고", "위기")
+    fwb_confidence = "validated" if routing.translation_validated and routing.using_official_lookup else "indicative"
+
+    # ── 5. 페르소나 라벨 (간단 규칙 기반) ──────────────
+    if profile.age >= 65 and s_sub > 0.6:
+        label = "은퇴기 주관 취약 고위험"
+    elif profile.years_to_retire <= 5 and s_obj > 0.5:
+        label = "은퇴임박 객관 취약"
+    elif s_sub > 0.6 and s_obj < 0.3:
+        label = "심리적 불안 중심 취약"
+    elif s_obj > 0.6 and s_sub < 0.3:
+        label = "객관 지표 중심 취약"
+    elif uvs < 30:
+        label = "전반 양호 (관리 단계)"
+    else:
+        label = "복합 취약 (모니터)"
+
+    flags = []
+    if obj_comp["s_runway"] > 0.7:
+        flags.append(f"생존여력 부족 ({features.get('survival_months_now', 0):.1f}개월)")
+    if obj_comp["s_dsr"] > 0.7:
+        flags.append(f"DSR 과다 ({features.get('dsr_now', 0):.0f}%)")
+    if obj_comp["s_pension"] > 0.7:
+        flags.append(f"연금대체율 낮음 ({features.get('rr_full', 0):.0f}%)")
+    if s_sub > 0.7:
+        flags.append(f"CFPB 주관 웰빙 취약 (fwb={fwb_score})")
+    if features.get("income_gap_years", 0) > 0:
+        flags.append(f"소득 공백기 {features.get('income_gap_years', 0)}년")
+
+    rationale = (
+        f"CFPB 주관 fwb_score={fwb_score} (S_sub={s_sub:.2f}), "
+        f"마이데이터 객관 S_obj={s_obj:.2f}. "
+        f"결합 base={base:.2f}, 다차원 트리거 {k}개({trigger_reasons}) "
+        f"→ UVS={uvs} → tier={tier}. "
+        f"{'한국어 비검증 번역이므로 주관 점수는 참고치.' if fwb_confidence == 'indicative' else ''}"
     )
-    print(f"[4] Persona — 점수: {result.vulnerability_score} | {result.persona_label}")
+
+    result = PersonaClassification(
+        vulnerability_score=uvs,
+        persona_label=label,
+        flags=flags,
+        needs_human_review=needs_review,
+        evidence={
+            "fwb_score": fwb_score,
+            "s_sub": round(s_sub, 3),
+            "s_obj": round(s_obj, 3),
+            "obj_components": obj_comp,
+            "base": round(base, 3),
+            "amplification": round(amplification, 3),
+            "triggers": trigger_reasons,
+        },
+        uvs=uvs,
+        tier=tier,
+        downstream_action=action,
+        fwb_confidence=fwb_confidence,
+        amplification_triggered=k > 0,
+        driver_attribution={
+            "resilience_subjective": round(s_sub, 2),
+            "resilience_objective": round(s_obj, 2),
+            "life_events": "not_measured",
+            "health": "not_measured",
+            "capability_digital": "not_measured",
+        },
+        rationale=rationale,
+    )
+    print(f"[4] Vulnerability — UVS: {uvs} | tier: {tier} | {label} | action: {action}")
     return {**state, "persona": result}
 
 
