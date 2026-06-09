@@ -1,0 +1,146 @@
+"""
+state.py — LangGraph AgentState 정의
+Image 2 플로우의 전체 상태를 하나의 TypedDict로 관리합니다.
+
+흐름:
+  Stored User State
+    → Feature Change Detection
+    → Orchestration Agent (재분석 필요 / 변화 없음 분기)
+        → [1] Backend Data Mapping
+        → [2] Cashflow Snapshot + Feature Extractor
+        → [3] Question Routing Agent
+        → [4] Evidence-based Persona Classifier
+        → [5] Final Cashflow Calculation
+        → [6] Dashboard Agent
+        → GuardRail Agent
+        → User State 업데이트
+        → 출력 (사용자 대시보드 / 실무자 검토 화면)
+"""
+
+from __future__ import annotations
+from typing import TypedDict, Optional, Literal
+from dataclasses import dataclass, field
+from mydata_schema import MyDataInput
+
+
+# ── 출력 모델들 ──────────────────────────────────────────
+
+@dataclass
+class FeatureChangeResult:
+    has_change: bool
+    changed_fields: list[str]   # 변경된 마이데이터 필드 목록
+    summary: str                # "연금 잔액 변경 감지" 등
+
+
+@dataclass
+class DataMappingResult:
+    """[1] Backend Data Mapping"""
+    mydata: MyDataInput
+    parsed_ok: bool
+    sheet_count: int            # 파싱된 시트 수
+
+
+@dataclass
+class CashflowSnapshot:
+    """[2] Cashflow Snapshot + Feature Extractor"""
+    monthly_income: int         # 월 수입
+    monthly_expense: int        # 월 지출
+    monthly_cashflow: int       # 순 현금흐름
+    liquid_assets: int          # 유동자산
+    extracted_features: dict    # {"rr_gap": 45.4, "survival_months": 17.1, ...}
+
+
+@dataclass
+class RoutingResult:
+    """[3] Question Routing Agent"""
+    intent: Literal[
+        "연금조회", "갈아타기", "세제혜택",
+        "수익률", "부족액", "일반상담"
+    ]
+    sub_questions: list[str]    # 분해된 세부 질문들
+    required_agents: list[str]  # 필요한 하위 에이전트 목록
+
+
+@dataclass
+class PersonaClassification:
+    """[4] Evidence-based Persona Classifier"""
+    vulnerability_score: int    # 0~100
+    persona_label: str          # "은퇴임박 안정형", "고위험 노출" 등
+    flags: list[str]
+    needs_human_review: bool
+    evidence: dict              # 각 지표별 근거값
+
+
+@dataclass
+class CashflowCalculation:
+    """[5] Final Cashflow Calculation"""
+    rr_gap: float               # 소득대체율 (공백기)
+    rr_full: float              # 소득대체율 (안정기)
+    survival_months_now: float  # 현재 생존 여력
+    survival_months_retire: float  # 은퇴 후 생존 여력
+    income_gap_years: int       # 소득 공백기 (년)
+    dsr_now: float              # DSR 재직 중
+    dsr_retire: float           # DSR 은퇴 후
+    portfolio_deviation: float  # 포트폴리오 괴리도
+    switch_score: int           # 갈아타기 점수
+    shortfall_monthly: int      # 월 부족액
+
+
+@dataclass
+class DashboardCard:
+    """[6] Dashboard Agent 출력"""
+    pension_breakdown: dict
+    goal_achievement_rate: float
+    action_items: list[str]
+    timeline_data: dict         # 소득 전환 타임라인
+
+
+@dataclass
+class GuardRailResult:
+    """GuardRail Agent"""
+    passed: bool
+    blocked_phrases: list[str]
+    safe_response: str
+
+
+@dataclass
+class ReviewCase:
+    """실무자 검토 케이스"""
+    customer_id: str
+    priority: Literal["긴급", "주의", "모니터"]
+    flag_reason: str
+    agent_evidence: str
+
+
+# ── LangGraph AgentState ─────────────────────────────────
+
+class AgentState(TypedDict):
+    # 입력
+    customer_id: str
+    query: str
+    mydata_raw: Optional[dict]              # 원본 마이데이터 (JSON)
+
+    # Orchestration 분기
+    feature_change: Optional[FeatureChangeResult]
+    needs_reanalysis: bool                  # True: 풀 파이프라인 / False: 캐시 반환
+
+    # [1] ~ [6] Agent 결과
+    data_mapping: Optional[DataMappingResult]
+    cashflow_snapshot: Optional[CashflowSnapshot]
+    routing: Optional[RoutingResult]
+    persona: Optional[PersonaClassification]
+    calculation: Optional[CashflowCalculation]
+    dashboard: Optional[DashboardCard]
+
+    # GuardRail
+    guardrail: Optional[GuardRailResult]
+
+    # 최종 출력
+    final_response: Optional[str]
+    review_case: Optional[ReviewCase]
+
+    # User State 업데이트용
+    user_state_updated: bool
+
+    # 에러
+    error: Optional[str]

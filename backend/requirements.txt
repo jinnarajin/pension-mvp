@@ -1,0 +1,18 @@
+# ── 핵심 의존성 ──────────────────────────────────────────
+openai>=1.40.0             # OpenAI Chat Completions (gpt-4o-mini)
+langgraph>=0.2.0           # Agent 파이프라인 StateGraph
+langgraph-checkpoint-redis  # Redis 체크포인트 (Stored User State)
+fastapi>=0.115.0           # API 서버 (Docker Container)
+uvicorn[standard]>=0.30.0  # ASGI 서버
+redis[hiredis]>=5.0.0      # User State 캐시
+
+# ── 데이터 처리 ──────────────────────────────────────────
+pydantic>=2.7.0            # 요청/응답 모델 검증
+openpyxl>=3.1.0            # 마이데이터 엑셀 파싱 (향후 직접 파싱 시)
+
+# ── 개발 도구 ────────────────────────────────────────────
+python-dotenv>=1.0.0       # 환경변수 관리
+
+# ── 테스트 ──────────────────────────────────────────────
+pytest>=8.0.0
+fakeredis>=2.20.0          # Redis 없이 agents.py 테스트

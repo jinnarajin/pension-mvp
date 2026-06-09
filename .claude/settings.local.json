@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsof -nP -iTCP:6379 -sTCP:LISTEN)",
+      "Bash(docker info *)",
+      "Bash(docker run *)",
+      "Bash(/opt/homebrew/bin/python3.12 -m venv .venv)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(docker exec *)",
+      "Bash(.venv/bin/python graph.py)",
+      "Bash(.venv/bin/python *)",
+      "Bash(docker rm *)",
+      "Bash(env)",
+      "Bash(printenv ANTHROPIC_API_KEY)",
+      "Bash(awk -F= '/^OPENAI_API_KEY=/ {print substr\\($2,1,10\\) \"...\\(len=\" length\\($2\\) \"\\)\"}' /Users/seojin/Documents/projects/JDgroup/pension-mvp/backend/.env)"
+    ]
+  }
+}
