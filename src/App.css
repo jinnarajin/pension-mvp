@@ -558,3 +558,135 @@ body,
   color: var(--text-strong);
   background: white;
 }
+
+/* ── Wizard topbar + step indicator (ported from prototype) ── */
+.topbar {
+  position: sticky;
+  top: 8px;
+  z-index: 20;
+  padding: 14px 18px 12px;
+}
+.brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.brand-name {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+.brand-name small {
+  font-weight: 600;
+  color: #aab1bf;
+  font-size: 11.5px;
+  margin-left: 6px;
+}
+.stepwrap {
+  /* outer wrapper for dots + label */
+}
+.dots-row {
+  display: flex;
+  align-items: center;
+}
+.dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: #fff;
+  color: #aab1bf;
+  font-weight: 800;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  cursor: pointer;
+  transition: 0.15s;
+}
+.dot.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.dot.done {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+.ln {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin: 0 5px;
+  border-radius: 2px;
+}
+.ln.fill {
+  background: var(--brand);
+}
+.step-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--brand);
+  margin-top: 10px;
+  text-align: center;
+}
+
+/* ── Bottom action bar ── */
+.step-actions {
+  position: sticky;
+  bottom: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  z-index: 20;
+}
+.btn-prev {
+  flex: 0 0 56px;
+  border: none;
+  border-radius: 14px;
+  padding: 14px 0;
+  font-size: 21px;
+  font-weight: 800;
+  background: #f1f5f9;
+  color: var(--text-mute);
+  cursor: pointer;
+}
+.btn-prev:active {
+  background: #e2e8f0;
+}
+.btn-next {
+  flex: 1;
+  border: none;
+  border-radius: 14px;
+  padding: 15px;
+  font-size: 16px;
+  font-weight: 800;
+  background: var(--brand);
+  color: #fff;
+  cursor: pointer;
+}
+.btn-next:active {
+  filter: brightness(0.94);
+}
+
+/* Step-transition fade — gives a subtle "step changed" cue */
+.container > section,
+.container > footer {
+  animation: stepFade 0.28s ease;
+}
+@keyframes stepFade {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .container > section,
+  .container > footer { animation: none; }
+}

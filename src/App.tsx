@@ -2,7 +2,7 @@
 // Single-page mobile-first UI. Results update on every keystroke
 // via useMemo, so there's no "submit" button.
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import type { PensionInput } from "./models/pension";
 import {
@@ -54,8 +54,31 @@ const STATUS_COLOR: Record<string, string> = {
   NEEDS_FOCUSED_MGMT: "status-focus",
 };
 
+// Wizard step config — matches prototype's 4-step pattern.
+const STEP_LABELS = ["입력", "간이 진단", "AI 상세", "다음 액션"] as const;
+const STEP_PRIMARY_LABEL = [
+  "결과 보기",
+  "AI 상세 진단",
+  "다음 단계로",
+  "처음부터 다시",
+] as const;
+const STEP_LS_KEY = "pension-wizard-step";
+
 export default function App() {
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
+  // Wizard step (0–3). Persisted across reloads so refreshes don't lose place.
+  const [step, setStep] = useState<number>(() => {
+    const v = Number(localStorage.getItem(STEP_LS_KEY));
+    return Number.isInteger(v) && v >= 0 && v <= 3 ? v : 0;
+  });
+  useEffect(() => {
+    localStorage.setItem(STEP_LS_KEY, String(step));
+    // Smooth scroll to top of body when step changes — matches the prototype's
+    // fresh-page feel where each step is a self-contained view.
+    document.querySelector(".container")?.scrollTo?.({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [step]);
+
   // When a built-in persona is loaded, we keep its full MyData payload so the
   // /analyze call can replay it verbatim (matches the backend smoke test).
   // Editing any form field clears this — see handleChange below.
@@ -276,14 +299,32 @@ export default function App() {
   return (
     <div className="page">
       <main className="container">
-        {/* 1. Hero Card */}
+        {/* 1. Topbar: brand + step indicator */}
+        <header className="topbar card">
+          <div className="brand-row">
+            <span className="brand-name">
+              연금 진단<small> JD·JB 금융 MVP</small>
+            </span>
+            <span className="badge" style={{ marginBottom: 0 }}>
+              {STEP_LABELS[step]}
+            </span>
+          </div>
+          <StepBar
+            labels={[...STEP_LABELS]}
+            current={step}
+            onJump={(i) => setStep(i)}
+          />
+        </header>
+
+        {/* Step 0: 입력 */}
+        {step === 0 && (<>
+        {/* Hero copy (kept as visible page header for step 0) */}
         <section className="card hero-card">
-          <span className="badge">통합연금포털 OpenAPI 기반 MVP</span>
           <h1 className="hero-title">내 노후 생활비, 준비되어 있을까요?</h1>
           <p className="hero-sub">
-            예상 연금과 목표 생활비를 비교해서
+            예상 연금과 목표 생활비를 입력하면
             <br />
-            지금의 준비 상태를 확인해 보세요.
+            준비 상태를 단계별로 진단해 드려요.
           </p>
         </section>
 
@@ -350,7 +391,10 @@ export default function App() {
             onChange={handleChange("loan")}
           />
         </section>
+        </>)}
 
+        {/* Step 1: 간이 진단 */}
+        {step === 1 && (<>
         {/* 3. Diagnosis Result Card */}
         <section className={`card result-card ${STATUS_COLOR[result.status]}`}>
           <h2 className="card-title">진단 결과</h2>
@@ -386,7 +430,10 @@ export default function App() {
             />
           </ul>
         </section>
+        </>)}
 
+        {/* Step 2: AI 상세 진단 */}
+        {step === 2 && (<>
         {/* 3-b. AI 멀티 에이전트 상세 진단 — POST /analyze */}
         <section className="card">
           <h2 className="card-title">AI 멀티 에이전트 상세 진단</h2>
@@ -484,7 +531,10 @@ export default function App() {
             </div>
           )}
         </section>
+        </>)}
 
+        {/* Step 3: 다음 액션 (추천 행동 + 연관 OpenAPI 활용) */}
+        {step === 3 && (<>
         {/* 4. Recommended Actions Card */}
         <section className="card">
           <h2 className="card-title">추천 행동</h2>
@@ -844,12 +894,71 @@ export default function App() {
           )}
         </section>
 
+        </>)}
+
         {/* 6. Bottom Notice */}
         <footer className="notice">
           본 결과는 입력하신 금액을 바탕으로 한 간이 진단입니다.
           실제 연금 수령액은 공식 기관 데이터에 따라 달라질 수 있어요.
         </footer>
+
+        {/* Bottom action bar — prev arrow + primary "next" */}
+        <div className="step-actions">
+          {step > 0 ? (
+            <button
+              type="button"
+              className="btn-prev"
+              onClick={() => setStep(step - 1)}
+              aria-label="이전 단계"
+            >
+              ←
+            </button>
+          ) : (
+            <span style={{ flex: "0 0 56px" }} />
+          )}
+          <button
+            type="button"
+            className="btn-next"
+            onClick={() => setStep(step < 3 ? step + 1 : 0)}
+          >
+            {STEP_PRIMARY_LABEL[step]} {step < 3 ? "→" : ""}
+          </button>
+        </div>
       </main>
+    </div>
+  );
+}
+
+// ── StepBar component ─────────────────────────────────────────────
+function StepBar({
+  labels,
+  current,
+  onJump,
+}: {
+  labels: string[];
+  current: number;
+  onJump: (i: number) => void;
+}) {
+  return (
+    <div className="stepwrap">
+      <div className="dots-row">
+        {labels.map((_, i) => (
+          <React.Fragment key={i}>
+            <button
+              type="button"
+              className={`dot ${i === current ? "on" : i < current ? "done" : ""}`}
+              onClick={() => onJump(i)}
+              aria-label={`${labels[i]} 단계로 이동`}
+            >
+              {i + 1}
+            </button>
+            {i < labels.length - 1 && (
+              <span className={`ln ${i < current ? "fill" : ""}`} />
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="step-label">{labels[current]}</div>
     </div>
   );
 }
