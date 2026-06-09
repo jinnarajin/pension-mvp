@@ -19,11 +19,12 @@ from graph import run_pipeline, build_graph
 from mydata_schema import MyDataInput, PERSONA_A, PERSONA_B
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-# Comma-separated list of allowed CORS origins. Default covers Vite dev server.
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173"
-).split(",")
+# Vite picks the next free port if 5173 is taken (5174, 5175…), so we allow
+# any localhost:5xxx during dev. Override ALLOWED_ORIGIN_REGEX in prod.
+ALLOWED_ORIGIN_REGEX = os.getenv(
+    "ALLOWED_ORIGIN_REGEX",
+    r"http://(localhost|127\.0\.0\.1):(517[0-9]|300[0-9]|800[0-9])",
+)
 
 app = FastAPI(
     title="연금 AI Agent API",
@@ -33,7 +34,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
