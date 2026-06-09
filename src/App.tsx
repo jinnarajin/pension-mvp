@@ -26,6 +26,14 @@ import {
   type FssApiResponse,
   type FssPensionStatResponse,
 } from "./services/fssOpenApi";
+import {
+  fetchAiDiagnosis,
+  fetchPersona,
+  pensionInputFromMyData,
+  type AiAgentExtras,
+  type AnalyzeResponse,
+  type MyDataPayload,
+} from "./services/pensionAiAgent";
 
 // Default dummy data as specified in the brief.
 const DEFAULT_INPUT: PensionInput = {
@@ -48,6 +56,19 @@ const STATUS_COLOR: Record<string, string> = {
 
 export default function App() {
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
+  // When a built-in persona is loaded, we keep its full MyData payload so the
+  // /analyze call can replay it verbatim (matches the backend smoke test).
+  // Editing any form field clears this — see handleChange below.
+  const [aiPayload, setAiPayload] = useState<MyDataPayload | null>(null);
+  const [aiExtras, setAiExtras] = useState<AiAgentExtras>({
+    age: 50,
+    risk_tolerance: "중립형",
+  });
+  const [aiState, setAiState] = useState<{
+    status: "idle" | "loading" | "success" | "error";
+    data: AnalyzeResponse | null;
+    error: string;
+  }>({ status: "idle", data: null, error: "" });
   const [apiState, setApiState] = useState<{
     status: "idle" | "loading" | "success" | "error";
     data: FssPensionStatResponse | null;
@@ -214,7 +235,43 @@ export default function App() {
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const raw = e.target.value.replace(/[^0-9]/g, ""); // digits only
       setInput((prev) => ({ ...prev, [key]: raw === "" ? 0 : Number(raw) }));
+      // User edited the form — discard any loaded persona payload so the next
+      // AI call synthesizes from the (now-divergent) form values.
+      setAiPayload(null);
     };
+
+  async function handleLoadPersona(id: string) {
+    setAiState({ status: "loading", data: null, error: "" });
+    try {
+      const payload = await fetchPersona(id);
+      setAiPayload(payload);
+      setInput(pensionInputFromMyData(payload));
+      const profile = payload.profile as {
+        age: number;
+        risk_tolerance: AiAgentExtras["risk_tolerance"];
+        job_type: string;
+      };
+      setAiExtras({
+        customer_id: id,
+        age: profile.age,
+        risk_tolerance: profile.risk_tolerance,
+        job_type: profile.job_type,
+      });
+      setAiState({ status: "idle", data: null, error: "" });
+    } catch (err) {
+      setAiState({ status: "error", data: null, error: String(err) });
+    }
+  }
+
+  async function handleRunAi() {
+    setAiState({ status: "loading", data: null, error: "" });
+    try {
+      const response = await fetchAiDiagnosis(input, aiExtras, aiPayload ?? undefined);
+      setAiState({ status: "success", data: response, error: "" });
+    } catch (err) {
+      setAiState({ status: "error", data: null, error: String(err) });
+    }
+  }
 
   return (
     <div className="page">
@@ -236,6 +293,26 @@ export default function App() {
           <p className="card-help">
             월 단위 금액과 총액 정보를 나눠 입력하세요. 입력하는 즉시 결과가 바뀝니다.
           </p>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "#666", alignSelf: "center" }}>샘플 페르소나:</span>
+            <button
+              type="button"
+              className="api-fetch-btn"
+              onClick={() => void handleLoadPersona("PA-0001")}
+              disabled={aiState.status === "loading"}
+            >
+              PA-0001 (57세 공무원)
+            </button>
+            <button
+              type="button"
+              className="api-fetch-btn"
+              onClick={() => void handleLoadPersona("PB-0001")}
+              disabled={aiState.status === "loading"}
+            >
+              PB-0001 (35세 회사원)
+            </button>
+          </div>
 
           <NumberField
             label="국민연금 (월)"
@@ -308,6 +385,104 @@ export default function App() {
               highlight
             />
           </ul>
+        </section>
+
+        {/* 3-b. AI 멀티 에이전트 상세 진단 — POST /analyze */}
+        <section className="card">
+          <h2 className="card-title">AI 멀티 에이전트 상세 진단</h2>
+          <p className="card-help">
+            LangGraph 12 Agent 파이프라인 (취약성 점수, 갈아타기 점수, GuardRail 검증 포함).
+            응답까지 10–15초 정도 소요됩니다.
+          </p>
+
+          <div className="ai-extras-grid">
+            <label className="ai-extra-field">
+              <span>나이</span>
+              <input
+                type="number"
+                min={20}
+                max={100}
+                value={aiExtras.age ?? 50}
+                onChange={(e) =>
+                  setAiExtras((prev) => ({ ...prev, age: Number(e.target.value) || 50 }))
+                }
+              />
+            </label>
+            <label className="ai-extra-field">
+              <span>위험 성향</span>
+              <select
+                value={aiExtras.risk_tolerance ?? "중립형"}
+                onChange={(e) =>
+                  setAiExtras((prev) => ({
+                    ...prev,
+                    risk_tolerance: e.target.value as AiAgentExtras["risk_tolerance"],
+                  }))
+                }
+              >
+                <option value="안정형">안정형</option>
+                <option value="중립형">중립형</option>
+                <option value="공격형">공격형</option>
+              </select>
+            </label>
+          </div>
+
+          <button
+            type="button"
+            className="api-fetch-btn"
+            onClick={() => void handleRunAi()}
+            disabled={aiState.status === "loading"}
+            style={{ marginTop: 12 }}
+          >
+            {aiState.status === "loading" ? "AI 분석 중…" : "🤖 AI 진단 받기"}
+          </button>
+
+          {aiPayload && (
+            <p className="card-help" style={{ marginTop: 8, color: "#0a7" }}>
+              ✓ 페르소나 데이터 로드됨 — 백엔드 스모크 테스트와 동일한 결과가 나옵니다.
+            </p>
+          )}
+
+          {aiState.status === "error" && (
+            <p style={{ color: "#c33", marginTop: 12, fontSize: 13 }}>
+              오류: {aiState.error}
+            </p>
+          )}
+
+          {aiState.status === "success" && aiState.data && (
+            <div style={{ marginTop: 16 }}>
+              <div className="status-pill">
+                취약성 점수 {aiState.data.vulnerability_score}점
+                {aiState.data.needs_review && ` · 실무자 검토 ${aiState.data.review_priority}`}
+              </div>
+
+              <h3 style={{ marginTop: 16, fontSize: 15 }}>액션 아이템</h3>
+              <ol className="action-list">
+                {aiState.data.action_items.length === 0 && <li>(없음)</li>}
+                {aiState.data.action_items.map((a, i) => (
+                  <li key={i}>
+                    <strong>{i + 1}.</strong> {a}
+                  </li>
+                ))}
+              </ol>
+
+              <h3 style={{ marginTop: 16, fontSize: 15 }}>AI 답변</h3>
+              <p style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6 }}>
+                {aiState.data.final_response}
+              </p>
+
+              <h3 style={{ marginTop: 16, fontSize: 15 }}>연금 구성 (월)</h3>
+              <ul className="kv-list">
+                {Object.entries(aiState.data.dashboard.pension_breakdown).map(([k, v]) => (
+                  <KV key={k} label={k} value={formatKRW(v)} />
+                ))}
+                <KV
+                  label="목표 달성률"
+                  value={`${aiState.data.dashboard.goal_achievement_rate}%`}
+                  highlight
+                />
+              </ul>
+            </div>
+          )}
         </section>
 
         {/* 4. Recommended Actions Card */}

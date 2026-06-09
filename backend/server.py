@@ -5,8 +5,10 @@ Image 1의 VPC → EC2 → Docker Network → API Server Container에 해당합�
 """
 
 import os
+import dataclasses
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json, asyncio
@@ -14,15 +16,29 @@ import json, asyncio
 load_dotenv()
 
 from graph import run_pipeline, build_graph
-from mydata_schema import MyDataInput
+from mydata_schema import MyDataInput, PERSONA_A, PERSONA_B
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# Comma-separated list of allowed CORS origins. Default covers Vite dev server.
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173"
+).split(",")
 
 app = FastAPI(
     title="연금 AI Agent API",
     description="마이데이터 기반 멀티 에이전트 연금 상담 시스템",
     version="1.0.0"
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+PERSONAS = {"PA-0001": PERSONA_A, "PB-0001": PERSONA_B}
 
 
 # ── 요청/응답 모델 ───────────────────────────────────────
@@ -86,6 +102,30 @@ async def analyze(req: AnalyzeRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "pension-ai-agent"}
+
+
+@app.get("/personas/{persona_id}")
+async def get_persona(persona_id: str):
+    """Return a full MyData JSON payload for a built-in persona (PA-0001 or PB-0001).
+    Used by the frontend to autofill the form with a known-good scenario."""
+    persona = PERSONAS.get(persona_id)
+    if persona is None:
+        raise HTTPException(status_code=404, detail=f"Unknown persona: {persona_id}")
+    return dataclasses.asdict(persona)
+
+
+@app.get("/personas")
+async def list_personas():
+    return [
+        {
+            "id": pid,
+            "name": p.profile.name,
+            "age": p.profile.age,
+            "job_type": p.profile.job_type,
+            "risk_tolerance": p.profile.risk_tolerance,
+        }
+        for pid, p in PERSONAS.items()
+    ]
 
 
 @app.get("/user-state/{customer_id}")

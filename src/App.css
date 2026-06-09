@@ -534,3 +534,27 @@ body,
   padding: 8px 12px 0;
   line-height: 1.6;
 }
+
+/* AI 멀티 에이전트 진단 섹션 */
+.ai-extras-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}
+.ai-extra-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-mute);
+}
+.ai-extra-field input,
+.ai-extra-field select {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 15px;
+  color: var(--text-strong);
+  background: white;
+}
