@@ -356,21 +356,6 @@ export default function App() {
           </div>
 
           <NumberField
-            label="국민연금 (월)"
-            value={input.nationalPension}
-            onChange={handleChange("nationalPension")}
-          />
-          <NumberField
-            label="퇴직연금 (월)"
-            value={input.retirementPension}
-            onChange={handleChange("retirementPension")}
-          />
-          <NumberField
-            label="개인연금 (월)"
-            value={input.privatePension}
-            onChange={handleChange("privatePension")}
-          />
-          <NumberField
             label="목표 월 노후 생활비"
             value={input.targetMonthlyCost}
             onChange={handleChange("targetMonthlyCost")}
@@ -379,16 +364,6 @@ export default function App() {
             label="현재 월 생활비"
             value={input.currentMonthlyLivingCost}
             onChange={handleChange("currentMonthlyLivingCost")}
-          />
-          <NumberField
-            label="예금/현금성 자산 (총액)"
-            value={input.deposit}
-            onChange={handleChange("deposit")}
-          />
-          <NumberField
-            label="대출 잔액 (총액)"
-            value={input.loan}
-            onChange={handleChange("loan")}
           />
         </section>
         </>)}
