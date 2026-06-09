@@ -1,7 +1,10 @@
 # ── 핵심 의존성 ──────────────────────────────────────────
 openai>=1.40.0             # OpenAI Chat Completions (gpt-4o-mini)
-langgraph>=0.2.0           # Agent 파이프라인 StateGraph
-langgraph-checkpoint-redis  # Redis 체크포인트 (Stored User State)
+langgraph>=1.2.0,<2          # Agent 파이프라인 StateGraph
+# langgraph-checkpoint 4.1.1+ removed _encode_constructor_args that
+# langgraph-checkpoint-redis 0.4.1 still calls — pin to 4.1.0 until upstream resolves.
+langgraph-checkpoint==4.1.0
+langgraph-checkpoint-redis>=0.4.1  # Redis 체크포인트 (Stored User State)
 fastapi>=0.115.0           # API 서버 (Docker Container)
 uvicorn[standard]>=0.30.0  # ASGI 서버
 redis[hiredis]>=5.0.0      # User State 캐시
