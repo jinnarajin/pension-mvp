@@ -101,11 +101,16 @@ def test_cashflow_snapshot_aggregates_from_monthly(base_state):
     s1 = agents.backend_data_mapping(base_state)
     s2 = agents.cashflow_snapshot(s1)
     snap = s2["cashflow_snapshot"]
-    assert snap.monthly_income == 5_500_000
-    assert snap.monthly_expense == 4_180_000
-    assert snap.monthly_cashflow == 1_320_000
-    assert snap.liquid_assets == 50_300_000
-    assert "switch_score" in snap.extracted_features
+    assert snap.monthly_income == 5_622_666
+    assert snap.monthly_expense == 4_333_333
+    assert snap.monthly_cashflow == 1_289_333
+    assert snap.liquid_assets == 92_340_000
+    assert snap.extracted_features["private_pension_balance"] == 60_300_000
+    assert snap.extracted_features["public_pension_contribution_total"] == 135_200_000
+    assert snap.extracted_features["retirement_age"] == 60
+    assert snap.extracted_features["service_years_at_retirement"] == 34
+    assert snap.extracted_features["retirement_lump_sum_estimated"] == 157_080_000
+    assert "switch_score" not in snap.extracted_features
 
 
 # ── supervisor_agent_check ──────────────────────────────────
@@ -125,9 +130,8 @@ def test_final_cashflow_returns_all_fields(base_state):
     )
     out = agents.final_cashflow_calculation(s)
     calc = out["calculation"]
-    assert 0 <= calc.switch_score <= 100
     assert calc.shortfall_monthly >= 0
-    assert calc.rr_full >= calc.rr_gap
+    assert calc.pension_replacement_rate >= 0
 
 
 # ── update_user_state ───────────────────────────────────────
@@ -141,7 +145,7 @@ def test_update_user_state_writes_to_redis(base_state, fake_redis):
     s = agents.final_cashflow_calculation(s)
     s = {**s, "persona": PersonaClassification(
         vulnerability_score=72, persona_label="은퇴임박 안정형",
-        flags=["RR_gap 낮음"], needs_human_review=False, evidence={},
+        flags=["연금소득대체율 낮음"], needs_human_review=False, evidence={},
     )}
     out = agents.update_user_state(s)
     assert out["user_state_updated"] is True
@@ -160,9 +164,9 @@ def test_create_review_case_high_vulnerability(base_state):
             flags=["다중위험"], needs_human_review=True, evidence={},
         ),
         "calculation": CashflowCalculation(
-            rr_gap=20, rr_full=40, survival_months_now=10, survival_months_retire=5,
+            pension_replacement_rate=40, survival_months_at_retirement=10, survival_months_retire=5,
             income_gap_years=5, dsr_now=15, dsr_retire=25, portfolio_deviation=10,
-            switch_score=60, shortfall_monthly=500_000,
+            shortfall_monthly=500_000,
         ),
         "data_mapping": agents.backend_data_mapping(base_state)["data_mapping"],
     }
@@ -180,9 +184,9 @@ def test_create_review_case_skipped_when_safe(base_state):
             flags=[], needs_human_review=False, evidence={},
         ),
         "calculation": CashflowCalculation(
-            rr_gap=50, rr_full=70, survival_months_now=20, survival_months_retire=18,
+            pension_replacement_rate=70, survival_months_at_retirement=20, survival_months_retire=18,
             income_gap_years=2, dsr_now=10, dsr_retire=12, portfolio_deviation=5,
-            switch_score=30, shortfall_monthly=0,
+            shortfall_monthly=0,
         ),
         "data_mapping": agents.backend_data_mapping(base_state)["data_mapping"],
     }

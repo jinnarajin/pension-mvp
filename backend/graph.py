@@ -55,8 +55,14 @@ def route_after_guardrail(state: AgentState) -> str:
     """GuardRail 이후 실무자 검토 여부 결정"""
     persona = state.get("persona")
     calc    = state.get("calculation")
-    if persona and (persona.needs_human_review or
-                    (calc and calc.switch_score >= 80)):
+    high_financial_risk = bool(
+        calc and (
+            calc.shortfall_monthly > 0
+            or calc.survival_months_retire < 12
+            or calc.dsr_retire >= 30
+        )
+    )
+    if persona and (persona.needs_human_review or high_financial_risk):
         return "needs_review"
     return "skip_review"
 

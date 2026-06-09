@@ -47,7 +47,7 @@ class CashflowSnapshot:
     monthly_expense: int        # 월 지출
     monthly_cashflow: int       # 순 현금흐름
     liquid_assets: int          # 유동자산
-    extracted_features: dict    # {"rr_gap": 45.4, "survival_months": 17.1, ...}
+    extracted_features: dict    # {"PensionReplacementRate": 40.0, "survival_months_retire": 99.0, ...}
 
 
 @dataclass
@@ -74,15 +74,13 @@ class PersonaClassification:
 @dataclass
 class CashflowCalculation:
     """[5] Final Cashflow Calculation"""
-    rr_gap: float               # 소득대체율 (공백기)
-    rr_full: float              # 소득대체율 (안정기)
-    survival_months_now: float  # 현재 생존 여력
+    pension_replacement_rate: float  # 은퇴 후 연금소득 / 은퇴 전 월소득
+    survival_months_at_retirement: float  # 60세 은퇴 직후 생존 여력
     survival_months_retire: float  # 은퇴 후 생존 여력
     income_gap_years: int       # 소득 공백기 (년)
     dsr_now: float              # DSR 재직 중
     dsr_retire: float           # DSR 은퇴 후
     portfolio_deviation: float  # 포트폴리오 괴리도
-    switch_score: int           # 갈아타기 점수
     shortfall_monthly: int      # 월 부족액
 
 

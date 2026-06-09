@@ -141,30 +141,22 @@ def backend_data_mapping(state: AgentState) -> AgentState:
 
 def cashflow_snapshot(state: AgentState) -> AgentState:
     """
-    월별요약(02_월별요약) 12개월 평균으로 현금흐름 스냅샷 생성.
-    계산 엔진(calculations.py)에서 주요 피처를 추출합니다.
+    사용자 정의 cashflow feature set 기준으로 현금흐름 스냅샷을 생성합니다.
+    계산 엔진(calculations.py)에서 월 소득·지출, 자산, 부채, 연금 피처를 추출합니다.
     """
     mydata = state["data_mapping"].mydata
-    summaries = mydata.monthly_summaries
-
-    avg_income   = sum(s.total_income   for s in summaries) // len(summaries)
-    avg_expense  = sum(s.total_expense  for s in summaries) // len(summaries)
-    avg_cashflow = sum(s.cashflow       for s in summaries) // len(summaries)
-
-    # 유동자산 합산 (04_계좌)
-    liquid = sum(a.balance for a in mydata.accounts)
 
     # 계산 엔진 호출
     features = calculate_all_metrics(mydata)
 
     result = CashflowSnapshot(
-        monthly_income=avg_income,
-        monthly_expense=avg_expense,
-        monthly_cashflow=avg_cashflow,
-        liquid_assets=liquid,
+        monthly_income=features["monthly_income_total"],
+        monthly_expense=features["monthly_expense_total"],
+        monthly_cashflow=features["net_cashflow_monthly"],
+        liquid_assets=features["liquid_asset_total"],
         extracted_features=features
     )
-    print(f"[2] Cashflow Snapshot — 월 현금흐름: {avg_cashflow:,}원")
+    print(f"[2] Cashflow Snapshot — 월 현금흐름: {result.monthly_cashflow:,}원")
     return {**state, "cashflow_snapshot": result}
 
 
@@ -259,15 +251,41 @@ def persona_classifier(state: AgentState) -> AgentState:
 연금 취약성 진단 전문가입니다. 아래 데이터를 분석하고 JSON으로만 응답하세요.
 
 [프로필]
-나이: {profile.age}세 / 직군: {profile.job_type} / 은퇴까지: {profile.years_to_retire}년
+나이: {features.get("age", profile.age)}세 / 지역: {features.get("region", "N/A")}
+가구원 수: {features.get("household_size", "N/A")}명 / 경제활동 상태: {features.get("employment_status", "N/A")}
+직군: {profile.job_type} / 기준 은퇴나이: {features.get("retirement_age", 60)}세 / 은퇴까지: {features.get("years_until_retirement", 0)}년
 핵심불안: {profile.core_anxiety}
 
-[계산된 지표]
-RR_gap: {features.get("rr_gap", "N/A")}%
+[Cashflow Snapshot Feature]
+월 총수입: {features.get("monthly_income_total", 0):,}원
+월 총지출: {features.get("monthly_expense_total", 0):,}원
+월 순현금흐름: {features.get("net_cashflow_monthly", 0):,}원
+월 필수지출: {features.get("essential_expense_monthly", 0):,}원
+월 보장성 보험료: {features.get("insurance_premium_monthly", 0):,}원
+월 대출상환액: {features.get("monthly_repayment_total", 0):,}원
+DSR: {features.get("debt_service_ratio", "N/A")}
+예금성 자산: {features.get("deposit_balance_total", 0):,}원
+투자자산: {features.get("investment_balance_total", 0):,}원
+부동산 추정가: {features.get("real_estate_value_estimated", 0):,}원
+60세 기준 퇴직금 추정액: {features.get("retirement_lump_sum_estimated", 0):,}원
+현재 근속연수: {features.get("service_years_current", 0)}년
+은퇴 시점 근속연수: {features.get("service_years_at_retirement", 0)}년
+총자산 추정액: {features.get("total_asset_estimated", 0):,}원
+대출잔액: {features.get("loan_balance_total", 0):,}원
+공적연금 납입·기여 총액: {features.get("public_pension_contribution_total", 0):,}원
+사적연금 잔액: {features.get("private_pension_balance", 0):,}원
+사적연금 월수령 추정액: {features.get("private_pension_monthly", 0):,}원
+공적연금 월수령 추정액: {features.get("public_pension_monthly", 0):,}원
+공적연금 수급 개시 나이: {features.get("public_pension_start_age", 0)}세
+연금 수령시기 조정 옵션: {features.get("pension_start_adjustment_options", {})}
+
+[파생 위험 지표]
+PensionReplacementRate: {features.get("PensionReplacementRate", "N/A")}%
+60세 은퇴 직후 생존여력: {features.get("survival_months_at_retirement", "N/A")}개월
 은퇴 후 생존여력: {features.get("survival_months_retire", "N/A")}개월
 DSR 은퇴 후: {features.get("dsr_retire", "N/A")}%
 포트폴리오 괴리도: {features.get("portfolio_deviation", "N/A")}%p
-갈아타기 점수: {features.get("switch_score", "N/A")}점
+월 부족액: {features.get("shortfall_monthly", 0):,}원
 
 [Supervisor 이상 감지]
 {anomalies if anomalies else "없음"}
@@ -278,7 +296,7 @@ DSR 은퇴 후: {features.get("dsr_retire", "N/A")}%
   "persona_label": "페르소나 한 줄 요약",
   "flags": ["플래그1", "플래그2"],
   "needs_human_review": true/false,
-  "evidence": {{"rr_gap": 값, "survival": 값}}
+  "evidence": {{"monthly_income_total": 값, "debt_service_ratio": 값, "private_pension_balance": 값}}
 }}
 """
     d = _llm(prompt, 500)
@@ -305,19 +323,16 @@ def final_cashflow_calculation(state: AgentState) -> AgentState:
     features = state["cashflow_snapshot"].extracted_features
 
     result = CashflowCalculation(
-        rr_gap=features.get("rr_gap", 0),
-        rr_full=features.get("rr_full", 0),
-        survival_months_now=features.get("survival_months_now", 0),
+        pension_replacement_rate=features.get("PensionReplacementRate", 0),
+        survival_months_at_retirement=features.get("survival_months_at_retirement", 0),
         survival_months_retire=features.get("survival_months_retire", 0),
         income_gap_years=features.get("income_gap_years", 0),
         dsr_now=features.get("dsr_now", 0),
         dsr_retire=features.get("dsr_retire", 0),
         portfolio_deviation=features.get("portfolio_deviation", 0),
-        switch_score=features.get("switch_score", 0),
         shortfall_monthly=features.get("shortfall_monthly", 0)
     )
-    print(f"[5] Final Calc — 부족액: {result.shortfall_monthly:,}원/월 | "
-          f"갈아타기: {result.switch_score}점")
+    print(f"[5] Final Calc — 부족액: {result.shortfall_monthly:,}원/월")
     return {**state, "calculation": result}
 
 
@@ -334,6 +349,7 @@ def dashboard_agent(state: AgentState) -> AgentState:
     calc    = state["calculation"]
     persona = state["persona"]
     query   = state["query"]
+    features = state["cashflow_snapshot"].extracted_features
 
     # 연금 구성 분해
     pension_breakdown = {
@@ -342,8 +358,7 @@ def dashboard_agent(state: AgentState) -> AgentState:
     }
 
     # 목표 달성률
-    target = mydata.dashboard.monthly_expense_avg
-    achievement = round(calc.rr_full, 1) if calc.rr_full else 0
+    achievement = round(calc.pension_replacement_rate, 1) if calc.pension_replacement_rate else 0
 
     # 액션 아이템 생성 (Claude)
     prompt = f"""
@@ -353,8 +368,18 @@ def dashboard_agent(state: AgentState) -> AgentState:
 페르소나: {persona.persona_label} (취약성 {persona.vulnerability_score}점)
 플래그: {persona.flags}
 월 부족액: {calc.shortfall_monthly:,}원
-갈아타기 점수: {calc.switch_score}점
-RR_gap: {calc.rr_gap}% / RR_full: {calc.rr_full}%
+월 총수입: {features.get("monthly_income_total", 0):,}원
+월 총지출: {features.get("monthly_expense_total", 0):,}원
+월 순현금흐름: {features.get("net_cashflow_monthly", 0):,}원
+사적연금 잔액: {features.get("private_pension_balance", 0):,}원
+대출잔액: {features.get("loan_balance_total", 0):,}원
+60세 기준 퇴직금 추정액: {features.get("retirement_lump_sum_estimated", 0):,}원
+은퇴 시점 근속연수: {features.get("service_years_at_retirement", 0)}년
+공적연금 수급 개시 나이: {features.get("public_pension_start_age", 0)}세
+공적연금 월수령 추정액: {features.get("public_pension_monthly", 0):,}원
+연금 수령시기 조정 옵션: {features.get("pension_start_adjustment_options", {})}
+PensionReplacementRate: {features.get("PensionReplacementRate", 0)}%
+60세 은퇴 직후 생존여력: {calc.survival_months_at_retirement}개월
 은퇴 후 생존여력: {calc.survival_months_retire}개월
 """
     resp = client.chat.completions.create(
@@ -364,8 +389,6 @@ RR_gap: {calc.rr_gap}% / RR_full: {calc.rr_full}%
     draft = resp.choices[0].message.content
 
     action_items = []
-    if calc.switch_score >= 60:
-        action_items.append(f"IRP 갈아타기 검토 권장 ({calc.switch_score}점)")
     if calc.shortfall_monthly > 0:
         action_items.append(f"월 {calc.shortfall_monthly//10000}만원 추가 납입 필요")
     if calc.portfolio_deviation > 15:
@@ -378,9 +401,10 @@ RR_gap: {calc.rr_gap}% / RR_full: {calc.rr_full}%
         goal_achievement_rate=achievement,
         action_items=action_items,
         timeline_data={
-            "rr_gap_period": f"{mydata.profile.retire_date[:4]}~{min(p.expected_start for p in mydata.pensions if p.pension_type == '국민연금')[:4] if any(p.pension_type == '국민연금' for p in mydata.pensions) else 'N/A'}",
-            "rr_gap": calc.rr_gap,
-            "rr_full": calc.rr_full,
+            "retirement_age": features.get("retirement_age", 60),
+            "public_pension_start_age": features.get("public_pension_start_age", 0),
+            "income_gap_years": calc.income_gap_years,
+            "PensionReplacementRate": calc.pension_replacement_rate,
         }
     )
     print(f"[6] Dashboard — 달성률: {achievement}% | 액션: {len(action_items)}개")
@@ -412,7 +436,7 @@ def guardrail_agent(state: AgentState) -> AgentState:
 초안:
 {draft}
 
-계산 근거: 갈아타기 점수={calc.switch_score}, 부족액={calc.shortfall_monthly:,}원
+계산 근거: 부족액={calc.shortfall_monthly:,}원, 은퇴 후 생존여력={calc.survival_months_retire}개월, DSR 은퇴 후={calc.dsr_retire}%
 
 응답 JSON:
 {{
@@ -450,7 +474,8 @@ def update_user_state(state: AgentState) -> AgentState:
         "irp_balance": next((p.current_value for p in mydata.pensions if p.pension_type=="IRP"), 0),
         "monthly_cashflow": state["cashflow_snapshot"].monthly_cashflow,
         "vulnerability_score": persona.vulnerability_score,
-        "switch_score": calc.switch_score,
+        "shortfall_monthly": calc.shortfall_monthly,
+        "survival_months_retire": calc.survival_months_retire,
         "last_analyzed": mydata.profile.customer_id,
     }
     _set_stored_state(state["customer_id"], snapshot)
@@ -468,14 +493,19 @@ def create_review_case(state: AgentState) -> AgentState:
     calc    = state["calculation"]
     profile = state["data_mapping"].mydata.profile
 
-    if not persona.needs_human_review and calc.switch_score < 80:
+    high_financial_risk = (
+        calc.shortfall_monthly > 0
+        or calc.survival_months_retire < 12
+        or calc.dsr_retire >= 30
+    )
+    if not persona.needs_human_review and not high_financial_risk:
         return state  # 검토 불필요
 
     priority = "긴급" if persona.vulnerability_score >= 80 else "주의"
     review = ReviewCase(
         customer_id=state["customer_id"],
         priority=priority,
-        flag_reason=f"취약성 {persona.vulnerability_score}점 | 갈아타기 {calc.switch_score}점",
+        flag_reason=f"취약성 {persona.vulnerability_score}점 | 부족액 {calc.shortfall_monthly:,}원 | 은퇴 DSR {calc.dsr_retire}%",
         agent_evidence=f"{persona.persona_label} | {', '.join(persona.flags[:2])}"
     )
     print(f"[실무자 검토] {priority} — {state['customer_id']}")
