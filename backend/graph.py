@@ -149,6 +149,7 @@ def run_pipeline(
     customer_id: str,
     query: str,
     mydata_raw: dict,
+    cfpb_input: dict | None = None,
     redis_url: str = DEFAULT_REDIS_URL
 ) -> dict:
     """
@@ -165,10 +166,22 @@ def run_pipeline(
     """
     pipeline = build_graph(redis_url)
 
+    # cfpb_input dict → CFPBInput dataclass (state.py에서 import)
+    from state import CFPBInput
+    cfpb_obj = None
+    if cfpb_input:
+        cfpb_obj = CFPBInput(
+            answers=cfpb_input.get("answers", {}),
+            age=int(cfpb_input.get("age", 0)),
+            mode=cfpb_input.get("mode", "self"),
+            translation_validated=cfpb_input.get("translation_validated", False),
+        )
+
     initial_state: AgentState = {
         "customer_id":       customer_id,
         "query":             query,
         "mydata_raw":        mydata_raw,
+        "cfpb_input":        cfpb_obj,
         "feature_change":    None,
         "needs_reanalysis":  True,
         "data_mapping":      None,

@@ -32,8 +32,16 @@ import {
   pensionInputFromMyData,
   type AiAgentExtras,
   type AnalyzeResponse,
+  type CfpbAnswers,
   type MyDataPayload,
 } from "./services/pensionAiAgent";
+import {
+  CFPB_QUESTIONS,
+  P1_OPTIONS,
+  P2_OPTIONS,
+  P1_INTRO,
+  P2_INTRO,
+} from "./data/cfpbQuestions";
 
 // Default dummy data as specified in the brief.
 const DEFAULT_INPUT: PensionInput = {
@@ -54,23 +62,30 @@ const STATUS_COLOR: Record<string, string> = {
   NEEDS_FOCUSED_MGMT: "status-focus",
 };
 
-// Wizard step config — matches prototype's 4-step pattern.
-const STEP_LABELS = ["입력", "간이 진단", "AI 상세", "다음 액션"] as const;
+// Wizard step config — 5단계 (CFPB 5문항 step이 간이진단↔AI 상세 사이에 들어감).
+// 사용자 표기 "1, 2, 2.5, 3, 4" — 2.5는 그대로 보여줘서 보조 단계임을 표현.
+const STEP_LABELS = ["입력", "간이 진단", "CFPB 설문", "AI 상세", "다음 액션"] as const;
+const STEP_BADGES = ["1", "2", "2.5", "3", "4"] as const;
 const STEP_PRIMARY_LABEL = [
-  "결과 보기",
-  "AI 상세 진단",
-  "다음 단계로",
-  "처음부터 다시",
+  "결과 보기",            // 0 → 1
+  "재무 웰빙 설문",       // 1 → 2 (CFPB)
+  "AI 진단 받기",         // 2 → 3 (자동 트리거 + AI 상세 보기)
+  "다음 단계로",          // 3 → 4
+  "처음부터 다시",        // 4 → 0
 ] as const;
 const STEP_LS_KEY = "pension-wizard-step";
+const MAX_STEP = STEP_LABELS.length - 1;
 
 export default function App() {
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
   // Wizard step (0–3). Persisted across reloads so refreshes don't lose place.
   const [step, setStep] = useState<number>(() => {
     const v = Number(localStorage.getItem(STEP_LS_KEY));
-    return Number.isInteger(v) && v >= 0 && v <= 3 ? v : 0;
+    return Number.isInteger(v) && v >= 0 && v <= MAX_STEP ? v : 0;
   });
+  // CFPB 5문항 응답 (Step 2 입력). 모두 채워져야 AI 진단 가능.
+  const [cfpbAnswers, setCfpbAnswers] = useState<CfpbAnswers>({});
+  const cfpbComplete = CFPB_QUESTIONS.every((q) => cfpbAnswers[q.id]);
   useEffect(() => {
     localStorage.setItem(STEP_LS_KEY, String(step));
     // Smooth scroll to top of body when step changes — matches the prototype's
@@ -289,11 +304,27 @@ export default function App() {
   async function handleRunAi() {
     setAiState({ status: "loading", data: null, error: "" });
     try {
-      const response = await fetchAiDiagnosis(input, aiExtras, aiPayload ?? undefined);
+      // CFPB 5문항 완료 시 함께 전송 → 백엔드가 [3] CFPB 채점 + [4] UVS 산출
+      const cfpb = cfpbComplete
+        ? {
+            answers: cfpbAnswers as Required<CfpbAnswers>,
+            age: aiExtras.age ?? 50,
+            mode: "self" as const,
+            translation_validated: false,
+          }
+        : undefined;
+      const response = await fetchAiDiagnosis(input, aiExtras, aiPayload ?? undefined, cfpb);
       setAiState({ status: "success", data: response, error: "" });
     } catch (err) {
       setAiState({ status: "error", data: null, error: String(err) });
     }
+  }
+
+  // CFPB 완료 후 "AI 진단 받기" 트리거: handleRunAi 실행 + 완료되면 다음 step
+  async function handleCfpbSubmit() {
+    if (!cfpbComplete) return;
+    setStep(3); // AI 상세 step으로 미리 이동 (로딩 UI 보이도록)
+    await handleRunAi();
   }
 
   return (
@@ -311,6 +342,7 @@ export default function App() {
           </div>
           <StepBar
             labels={[...STEP_LABELS]}
+            badges={[...STEP_BADGES]}
             current={step}
             onJump={(i) => setStep(i)}
           />
@@ -356,21 +388,6 @@ export default function App() {
           </div>
 
           <NumberField
-            label="국민연금 (월)"
-            value={input.nationalPension}
-            onChange={handleChange("nationalPension")}
-          />
-          <NumberField
-            label="퇴직연금 (월)"
-            value={input.retirementPension}
-            onChange={handleChange("retirementPension")}
-          />
-          <NumberField
-            label="개인연금 (월)"
-            value={input.privatePension}
-            onChange={handleChange("privatePension")}
-          />
-          <NumberField
             label="목표 월 노후 생활비"
             value={input.targetMonthlyCost}
             onChange={handleChange("targetMonthlyCost")}
@@ -379,16 +396,6 @@ export default function App() {
             label="현재 월 생활비"
             value={input.currentMonthlyLivingCost}
             onChange={handleChange("currentMonthlyLivingCost")}
-          />
-          <NumberField
-            label="예금/현금성 자산 (총액)"
-            value={input.deposit}
-            onChange={handleChange("deposit")}
-          />
-          <NumberField
-            label="대출 잔액 (총액)"
-            value={input.loan}
-            onChange={handleChange("loan")}
           />
         </section>
         </>)}
@@ -432,8 +439,26 @@ export default function App() {
         </section>
         </>)}
 
-        {/* Step 2: AI 상세 진단 */}
+        {/* Step 2: CFPB 5문항 설문 (NEW) */}
         {step === 2 && (<>
+        <section className="card">
+          <h2 className="card-title">재무 웰빙 설문 (CFPB 약식 5문항)</h2>
+          <p className="card-help">
+            아래 5개 문장에 솔직하게 답해 주세요. 응답은 결정론적 룩업표로 채점돼
+            <br />다음 단계의 AI 취약성 진단에 사용됩니다.
+          </p>
+          <p style={{ fontSize: 12, color: "#aab1bf", marginTop: 0 }}>
+            출처: CFPB Financial Well-Being Scale (Abbreviated). 한국어는 비검증 번역 — 점수는 참고치.
+          </p>
+          <CfpbForm answers={cfpbAnswers} onChange={setCfpbAnswers} />
+          <div style={{ marginTop: 12, fontSize: 13, color: cfpbComplete ? "#0a7" : "#aab1bf" }}>
+            {cfpbComplete ? "✓ 5문항 모두 응답 완료" : `${Object.values(cfpbAnswers).filter(Boolean).length} / 5 응답`}
+          </div>
+        </section>
+        </>)}
+
+        {/* Step 3: AI 상세 진단 (CFPB 채점 + UVS 산출 결과 표시) */}
+        {step === 3 && (<>
         {/* 3-b. AI 멀티 에이전트 상세 진단 — POST /analyze */}
         <section className="card">
           <h2 className="card-title">AI 멀티 에이전트 상세 진단</h2>
@@ -498,9 +523,18 @@ export default function App() {
           {aiState.status === "success" && aiState.data && (
             <div style={{ marginTop: 16 }}>
               <div className="status-pill">
-                취약성 점수 {aiState.data.vulnerability_score}점
-                {aiState.data.needs_review && ` · 실무자 검토 ${aiState.data.review_priority}`}
+                UVS {aiState.data.uvs}점 · {aiState.data.tier}
+                {aiState.data.needs_review && ` · 실무자 검토 ${aiState.data.review_priority ?? ""}`.trim()}
               </div>
+              <ul className="kv-list" style={{ marginTop: 12 }}>
+                <KV label="CFPB fwb_score" value={`${aiState.data.fwb_score}점 (${aiState.data.fwb_confidence === "validated" ? "검증" : "참고치"})`} />
+                <KV label="후속 조치" value={aiState.data.downstream_action} />
+              </ul>
+              {aiState.data.rationale && (
+                <p style={{ fontSize: 12, color: "#aab1bf", marginTop: 8, lineHeight: 1.5 }}>
+                  {aiState.data.rationale}
+                </p>
+              )}
 
               <h3 style={{ marginTop: 16, fontSize: 15 }}>액션 아이템</h3>
               <ol className="action-list">
@@ -533,8 +567,8 @@ export default function App() {
         </section>
         </>)}
 
-        {/* Step 3: 다음 액션 (추천 행동 + 연관 OpenAPI 활용) */}
-        {step === 3 && (<>
+        {/* Step 4: 다음 액션 (추천 행동 + 연관 OpenAPI 활용) */}
+        {step === 4 && (<>
         {/* 4. Recommended Actions Card */}
         <section className="card">
           <h2 className="card-title">추천 행동</h2>
@@ -902,7 +936,9 @@ export default function App() {
           실제 연금 수령액은 공식 기관 데이터에 따라 달라질 수 있어요.
         </footer>
 
-        {/* Bottom action bar — prev arrow + primary "next" */}
+        {/* Bottom action bar — prev arrow + primary "next".
+            Step 2 (CFPB) → Step 3 (AI 상세) 전환은 handleCfpbSubmit가 가로채서
+            handleRunAi() 자동 실행 + step 전환을 함께 처리. */}
         <div className="step-actions">
           {step > 0 ? (
             <button
@@ -919,9 +955,20 @@ export default function App() {
           <button
             type="button"
             className="btn-next"
-            onClick={() => setStep(step < 3 ? step + 1 : 0)}
+            onClick={() => {
+              if (step === 2) {
+                // CFPB → AI 자동 트리거
+                void handleCfpbSubmit();
+              } else if (step < MAX_STEP) {
+                setStep(step + 1);
+              } else {
+                setStep(0);
+              }
+            }}
+            disabled={step === 2 && !cfpbComplete}
+            style={step === 2 && !cfpbComplete ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
           >
-            {STEP_PRIMARY_LABEL[step]} {step < 3 ? "→" : ""}
+            {STEP_PRIMARY_LABEL[step]} {step < MAX_STEP ? "→" : ""}
           </button>
         </div>
       </main>
@@ -932,10 +979,12 @@ export default function App() {
 // ── StepBar component ─────────────────────────────────────────────
 function StepBar({
   labels,
+  badges,
   current,
   onJump,
 }: {
   labels: string[];
+  badges?: string[];
   current: number;
   onJump: (i: number) => void;
 }) {
@@ -950,7 +999,7 @@ function StepBar({
               onClick={() => onJump(i)}
               aria-label={`${labels[i]} 단계로 이동`}
             >
-              {i + 1}
+              {badges ? badges[i] : i + 1}
             </button>
             {i < labels.length - 1 && (
               <span className={`ln ${i < current ? "fill" : ""}`} />
@@ -959,6 +1008,65 @@ function StepBar({
         ))}
       </div>
       <div className="step-label">{labels[current]}</div>
+    </div>
+  );
+}
+
+// ── CFPB 5-question form ─────────────────────────────────────────
+function CfpbForm({
+  answers,
+  onChange,
+}: {
+  answers: CfpbAnswers;
+  onChange: (next: CfpbAnswers) => void;
+}) {
+  // Group questions by part so the two intros render once each.
+  const p1 = CFPB_QUESTIONS.filter((q) => q.part === "P1");
+  const p2 = CFPB_QUESTIONS.filter((q) => q.part === "P2");
+
+  function setAnswer(id: keyof CfpbAnswers, value: string) {
+    onChange({ ...answers, [id]: value } as CfpbAnswers);
+  }
+
+  return (
+    <div>
+      <div className="cfpb-intro">{P1_INTRO}</div>
+      {p1.map((q) => (
+        <div key={q.id} className="cfpb-q">
+          <div className="cfpb-q-text">{q.text_ko}</div>
+          <div className="cfpb-opts">
+            {P1_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                className={`cfpb-opt ${answers[q.id] === o.value ? "on" : ""}`}
+                onClick={() => setAnswer(q.id, o.value)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <div className="cfpb-intro" style={{ marginTop: 16 }}>{P2_INTRO}</div>
+      {p2.map((q) => (
+        <div key={q.id} className="cfpb-q">
+          <div className="cfpb-q-text">{q.text_ko}</div>
+          <div className="cfpb-opts">
+            {P2_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                className={`cfpb-opt ${answers[q.id] === o.value ? "on" : ""}`}
+                onClick={() => setAnswer(q.id, o.value)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

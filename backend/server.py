@@ -44,20 +44,37 @@ PERSONAS = {"PA-0001": PERSONA_A, "PB-0001": PERSONA_B}
 
 # ── 요청/응답 모델 ───────────────────────────────────────
 
+class CFPBPayload(BaseModel):
+    """프론트의 CFPB 5문항 응답."""
+    answers: dict                       # {"q3": "not_at_all", ...}
+    age: int
+    mode: str = "self"
+    translation_validated: bool = False
+
+
 class AnalyzeRequest(BaseModel):
     customer_id: str
     query: str
-    mydata_raw: dict        # 마이데이터 JSON (10개 시트 구조)
+    mydata_raw: dict                    # 마이데이터 JSON (10개 시트 구조)
+    cfpb: CFPBPayload | None = None     # CFPB 약식 5문항 응답 (선택)
+    cfpb_input: CFPBPayload | None = None  # 프론트 호환 alias
 
 
 class AnalyzeResponse(BaseModel):
     customer_id:      str
     final_response:   str
-    vulnerability_score: int
+    vulnerability_score: int            # = uvs
     action_items:     list[str]
     needs_review:     bool
     review_priority:  str | None
     dashboard:        dict
+    # CFPB / Vulnerability Analyzer 결과
+    uvs:              int = 0
+    tier:             str = "주의"
+    downstream_action: str = "ui_simple_home"
+    fwb_score:        int = 0
+    fwb_confidence:   str = "indicative"
+    rationale:        str = ""
 
 
 # ── 엔드포인트 ──────────────────────────────────────────
@@ -69,10 +86,12 @@ async def analyze(req: AnalyzeRequest):
     Feature Change Detection → Orchestration → [1]~[6] → GuardRail → 출력
     """
     try:
+        cfpb_payload = req.cfpb or req.cfpb_input
         result = run_pipeline(
             customer_id=req.customer_id,
             query=req.query,
             mydata_raw=req.mydata_raw,
+            cfpb_input=cfpb_payload.model_dump() if cfpb_payload else None,
             redis_url=REDIS_URL,
         )
 
@@ -80,6 +99,7 @@ async def analyze(req: AnalyzeRequest):
             raise HTTPException(status_code=500, detail=result["error"])
 
         persona   = result.get("persona")
+        routing   = result.get("routing")
         dashboard = result.get("dashboard")
         review    = result.get("review_case")
 
@@ -94,7 +114,13 @@ async def analyze(req: AnalyzeRequest):
                 "pension_breakdown":    dashboard.pension_breakdown if dashboard else {},
                 "goal_achievement_rate": dashboard.goal_achievement_rate if dashboard else 0,
                 "timeline_data":        dashboard.timeline_data if dashboard else {},
-            }
+            },
+            uvs=persona.uvs if persona else 0,
+            tier=persona.tier if persona else "주의",
+            downstream_action=persona.downstream_action if persona else "ui_simple_home",
+            fwb_score=routing.fwb_score if routing else 0,
+            fwb_confidence=persona.fwb_confidence if persona else "indicative",
+            rationale=persona.rationale if persona else "",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -36,6 +36,7 @@ def base_state(mydata_raw):
         "customer_id": "PA-0001",
         "query": "test",
         "mydata_raw": mydata_raw,
+        "cfpb_input": None,
         "feature_change": None,
         "needs_reanalysis": True,
         "data_mapping": None,
@@ -120,6 +121,28 @@ def test_supervisor_appends_anomalies_list(base_state):
     out = agents.supervisor_agent_check(s)
     assert "supervisor_anomalies" in out["cashflow_snapshot"].extracted_features
     assert isinstance(out["cashflow_snapshot"].extracted_features["supervisor_anomalies"], list)
+
+
+# ── question_routing_agent ────────────────────────────────
+
+def test_question_routing_defaults_when_cfpb_missing(base_state):
+    out = agents.question_routing_agent(base_state)
+    assert out["routing"].fwb_score == 50
+    assert out["routing"].intent == "cfpb_skipped"
+
+
+# ── persona_classifier ────────────────────────────────────
+
+def test_persona_classifier_combines_cfpb_and_retirement_metrics(base_state):
+    s = agents.supervisor_agent_check(
+        agents.cashflow_snapshot(agents.backend_data_mapping(base_state))
+    )
+    s = agents.question_routing_agent(s)
+    out = agents.persona_classifier(s)
+    persona = out["persona"]
+    assert persona.uvs == persona.vulnerability_score
+    assert "s_obj" in persona.evidence
+    assert "s_runway" in persona.evidence["obj_components"]
 
 
 # ── final_cashflow_calculation ──────────────────────────────

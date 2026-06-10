@@ -25,6 +25,25 @@ export interface AiAgentExtras {
   retire_age?: number;
 }
 
+// CFPB 약식 5문항 응답 슬러그 — cfpb_fwb_scorer.py의 P1/P2와 매칭
+export type CfpbP1Answer = "completely" | "very_well" | "somewhat" | "very_little" | "not_at_all";
+export type CfpbP2Answer = "always" | "often" | "sometimes" | "rarely" | "never";
+
+export interface CfpbAnswers {
+  q3?: CfpbP1Answer;
+  q5?: CfpbP1Answer;
+  q6?: CfpbP1Answer;
+  q8?: CfpbP2Answer;
+  q10?: CfpbP2Answer;
+}
+
+export interface CfpbPayload {
+  answers: Required<CfpbAnswers>;
+  age: number;
+  mode?: "self" | "other";
+  translation_validated?: boolean;
+}
+
 export interface AnalyzeResponse {
   customer_id: string;
   final_response: string;
@@ -37,6 +56,13 @@ export interface AnalyzeResponse {
     goal_achievement_rate: number;
     timeline_data: Record<string, unknown>;
   };
+  // CFPB / Vulnerability Analyzer 결과
+  uvs: number;
+  tier: "주의" | "경고" | "위기";
+  downstream_action: string;
+  fwb_score: number;
+  fwb_confidence: "indicative" | "validated";
+  rationale: string;
 }
 
 export interface PersonaSummary {
@@ -97,6 +123,7 @@ export async function fetchAiDiagnosis(
   input: PensionInput,
   extras: AiAgentExtras = {},
   mydataOverride?: MyDataPayload,
+  cfpb?: CfpbPayload,
 ): Promise<AnalyzeResponse> {
   const customer_id = extras.customer_id ?? "FE-LOCAL";
   const query = extras.query ?? "현재 노후 준비 상태를 진단하고 갈아타기가 필요한지 알려주세요.";
@@ -106,7 +133,7 @@ export async function fetchAiDiagnosis(
   const r = await fetch(`${API_URL}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customer_id, query, mydata_raw }),
+    body: JSON.stringify({ customer_id, query, mydata_raw, cfpb }),
   });
 
   if (!r.ok) {
