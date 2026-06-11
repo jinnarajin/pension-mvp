@@ -46,8 +46,8 @@ class CashflowSnapshot:
     monthly_income: int         # 월 수입
     monthly_expense: int        # 월 지출
     monthly_cashflow: int       # 순 현금흐름
-    liquid_assets: int          # 유동자산
-    extracted_features: dict    # {"rr_gap": 45.4, "survival_months": 17.1, ...}
+    liquid_assets: int          # 즉시유동자산
+    extracted_features: dict    # {"PensionReplacementRate": 40.0, "survival_months_retire": 99.0, ...}
 
 
 @dataclass
@@ -99,16 +99,18 @@ class PersonaClassification:
 @dataclass
 class CashflowCalculation:
     """[5] Final Cashflow Calculation"""
-    rr_gap: float               # 소득대체율 (공백기)
-    rr_full: float              # 소득대체율 (안정기)
-    survival_months_now: float  # 현재 생존 여력
+    pension_replacement_rate: float  # 은퇴 후 연금소득 / 은퇴 전 월소득
+    survival_months_at_retirement: float  # 60세 은퇴 직후 생존 여력
     survival_months_retire: float  # 은퇴 후 생존 여력
-    income_gap_years: int       # 소득 공백기 (년)
+    income_gap_years: float     # 소득 공백기 (년)
     dsr_now: float              # DSR 재직 중
     dsr_retire: float           # DSR 은퇴 후
     portfolio_deviation: float  # 포트폴리오 괴리도
-    switch_score: int           # 갈아타기 점수
     shortfall_monthly: int      # 월 부족액
+    income_gap_months: int = 0  # 소득 공백기 (월)
+    life_expectancy_age: int = 90
+    retirement_total_shortfall_estimated: int = 0
+    retirement_total_shortfall_after_assets: int = 0
 
 
 @dataclass
@@ -118,6 +120,24 @@ class DashboardCard:
     goal_achievement_rate: float
     action_items: list[str]
     timeline_data: dict         # 소득 전환 타임라인
+
+
+@dataclass
+class ScenarioOptions:
+    """프론트에서 받은 은퇴 시나리오 입력값."""
+    retirement_age: int = 60
+    target_monthly_expense: int = 0
+
+
+@dataclass
+class ScenarioComparison:
+    """연금 수령방식 시나리오 tool 결과."""
+    target_monthly_expense: int
+    retirement_age: int
+    scenarios: list[dict]
+    recommended_scenario_id: str
+    recommendation_reason: str
+    tool_trace: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -145,6 +165,7 @@ class AgentState(TypedDict):
     query: str
     mydata_raw: Optional[dict]              # 원본 마이데이터 (JSON)
     cfpb_input: Optional[CFPBInput]         # CFPB 5문항 응답 (프론트에서 받음)
+    scenario_options: Optional[ScenarioOptions]
 
     # Orchestration 분기
     feature_change: Optional[FeatureChangeResult]
@@ -156,6 +177,7 @@ class AgentState(TypedDict):
     routing: Optional[RoutingResult]
     persona: Optional[PersonaClassification]
     calculation: Optional[CashflowCalculation]
+    scenario_comparison: Optional[ScenarioComparison]
     dashboard: Optional[DashboardCard]
 
     # GuardRail

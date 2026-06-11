@@ -117,6 +117,9 @@ def score_cfpb_fwb_abbreviated(
     Returns dict with fwb_score, raw_total, group, recodes, scale.
     Raises if any item is missing or out of vocabulary.
     """
+    if mode not in ("self", "other"):
+        raise ValueError("mode must be either 'self' or 'other'")
+
     required = set(ITEMS.keys())
     if set(answers.keys()) != required:
         missing = required - set(answers.keys())

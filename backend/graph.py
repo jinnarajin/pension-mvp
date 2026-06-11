@@ -36,6 +36,7 @@ from agents import (
     question_routing_agent,
     persona_classifier,
     final_cashflow_calculation,
+    pension_receipt_scenario_agent,
     dashboard_agent,
     guardrail_agent,
     create_review_case,
@@ -55,8 +56,14 @@ def route_after_guardrail(state: AgentState) -> str:
     """GuardRail 이후 실무자 검토 여부 결정"""
     persona = state.get("persona")
     calc    = state.get("calculation")
-    if persona and (persona.needs_human_review or
-                    (calc and calc.switch_score >= 80)):
+    high_financial_risk = bool(
+        calc and (
+            calc.shortfall_monthly > 0
+            or calc.survival_months_retire < 12
+            or calc.dsr_retire >= 30
+        )
+    )
+    if persona and (persona.needs_human_review or high_financial_risk):
         return "needs_review"
     return "skip_review"
 
@@ -84,6 +91,7 @@ def build_graph(redis_url: str = DEFAULT_REDIS_URL) -> StateGraph:
     graph.add_node("question_routing_agent",     question_routing_agent)
     graph.add_node("persona_classifier",         persona_classifier)
     graph.add_node("final_cashflow_calculation", final_cashflow_calculation)
+    graph.add_node("pension_receipt_scenario_agent", pension_receipt_scenario_agent)
     graph.add_node("dashboard_agent",            dashboard_agent)
     graph.add_node("guardrail_agent",            guardrail_agent)
     graph.add_node("create_review_case",         create_review_case)
@@ -112,7 +120,8 @@ def build_graph(redis_url: str = DEFAULT_REDIS_URL) -> StateGraph:
     graph.add_edge("supervisor_agent_check",     "question_routing_agent")
     graph.add_edge("question_routing_agent",     "persona_classifier")
     graph.add_edge("persona_classifier",         "final_cashflow_calculation")
-    graph.add_edge("final_cashflow_calculation", "dashboard_agent")
+    graph.add_edge("final_cashflow_calculation", "pension_receipt_scenario_agent")
+    graph.add_edge("pension_receipt_scenario_agent", "dashboard_agent")
     graph.add_edge("dashboard_agent",            "guardrail_agent")        # GuardRail
 
     # ── GuardRail 이후 조건 분기: 실무자 검토 필요 여부
@@ -144,6 +153,7 @@ def run_pipeline(
     query: str,
     mydata_raw: dict,
     cfpb_input: dict | None = None,
+    scenario_options: dict | None = None,
     redis_url: str = DEFAULT_REDIS_URL
 ) -> dict:
     """
@@ -161,7 +171,7 @@ def run_pipeline(
     pipeline = build_graph(redis_url)
 
     # cfpb_input dict → CFPBInput dataclass (state.py에서 import)
-    from state import CFPBInput
+    from state import CFPBInput, ScenarioOptions
     cfpb_obj = None
     if cfpb_input:
         cfpb_obj = CFPBInput(
@@ -170,12 +180,19 @@ def run_pipeline(
             mode=cfpb_input.get("mode", "self"),
             translation_validated=cfpb_input.get("translation_validated", False),
         )
+    scenario_obj = None
+    if scenario_options:
+        scenario_obj = ScenarioOptions(
+            retirement_age=int(scenario_options.get("retirement_age", 60)),
+            target_monthly_expense=int(scenario_options.get("target_monthly_expense", 0)),
+        )
 
     initial_state: AgentState = {
         "customer_id":       customer_id,
         "query":             query,
         "mydata_raw":        mydata_raw,
         "cfpb_input":        cfpb_obj,
+        "scenario_options":  scenario_obj,
         "feature_change":    None,
         "needs_reanalysis":  True,
         "data_mapping":      None,
@@ -183,6 +200,7 @@ def run_pipeline(
         "routing":           None,
         "persona":           None,
         "calculation":       None,
+        "scenario_comparison": None,
         "dashboard":         None,
         "guardrail":         None,
         "final_response":    None,
