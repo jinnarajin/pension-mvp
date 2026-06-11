@@ -58,6 +58,7 @@ class AnalyzeRequest(BaseModel):
     mydata_raw: dict                    # 마이데이터 JSON (10개 시트 구조)
     cfpb: CFPBPayload | None = None     # CFPB 약식 5문항 응답 (선택)
     cfpb_input: CFPBPayload | None = None  # 프론트 호환 alias
+    scenario_options: dict | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -75,6 +76,7 @@ class AnalyzeResponse(BaseModel):
     fwb_score:        int = 0
     fwb_confidence:   str = "indicative"
     rationale:        str = ""
+    scenario_comparison: dict = {}
 
 
 # ── 엔드포인트 ──────────────────────────────────────────
@@ -92,6 +94,7 @@ async def analyze(req: AnalyzeRequest):
             query=req.query,
             mydata_raw=req.mydata_raw,
             cfpb_input=cfpb_payload.model_dump() if cfpb_payload else None,
+            scenario_options=req.scenario_options,
             redis_url=REDIS_URL,
         )
 
@@ -101,6 +104,7 @@ async def analyze(req: AnalyzeRequest):
         persona   = result.get("persona")
         routing   = result.get("routing")
         dashboard = result.get("dashboard")
+        scenario  = result.get("scenario_comparison")
         review    = result.get("review_case")
 
         return AnalyzeResponse(
@@ -121,6 +125,7 @@ async def analyze(req: AnalyzeRequest):
             fwb_score=routing.fwb_score if routing else 0,
             fwb_confidence=persona.fwb_confidence if persona else "indicative",
             rationale=persona.rationale if persona else "",
+            scenario_comparison=dataclasses.asdict(scenario) if scenario else {},
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

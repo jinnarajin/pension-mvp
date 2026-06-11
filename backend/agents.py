@@ -15,19 +15,21 @@ from dotenv import load_dotenv
 from state import (
     AgentState, FeatureChangeResult, DataMappingResult, CashflowSnapshot,
     RoutingResult, PersonaClassification, CashflowCalculation,
-    DashboardCard, GuardRailResult, ReviewCase
+    DashboardCard, ScenarioComparison, GuardRailResult, ReviewCase
 )
 from mydata_schema import MyDataInput
 from calculations import calculate_all_metrics
+from scenario_tools import build_pension_receipt_scenarios
 from cfpb_fwb_scorer import (
     score_cfpb_fwb_abbreviated,
     USING_OFFICIAL_LOOKUP,
 )
+from rag_terms import lookup_terms, format_term_glossary
 
 load_dotenv()
 
 client = OpenAI()
-MODEL  = "gpt-4o-mini"
+MODEL  = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 
 # Redis (Stored User State)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -36,15 +38,37 @@ redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 # ── 헬퍼 ────────────────────────────────────────────────
 
+def _llm_text(prompt: str, max_tokens: int = 800, json_mode: bool = False) -> str:
+    """OpenAI Responses API first, Chat Completions fallback for older runtimes."""
+    try:
+        kwargs = {
+            "model": MODEL,
+            "input": prompt,
+            "max_output_tokens": max_tokens,
+        }
+        if json_mode:
+            kwargs["text"] = {"format": {"type": "json_object"}}
+        resp = client.responses.create(**kwargs)
+        text = getattr(resp, "output_text", "")
+        if text:
+            return text.strip()
+    except Exception:
+        pass
+
+    chat_kwargs = {
+        "model": MODEL,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if json_mode:
+        chat_kwargs["response_format"] = {"type": "json_object"}
+    resp = client.chat.completions.create(**chat_kwargs)
+    return resp.choices[0].message.content.strip()
+
+
 def _llm(prompt: str, max_tokens: int = 800) -> dict:
-    """OpenAI Chat Completions → JSON 파싱. JSON 모드 사용."""
-    resp = client.chat.completions.create(
-        model=MODEL,
-        max_tokens=max_tokens,
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = resp.choices[0].message.content.strip()
+    """OpenAI JSON response helper."""
+    text = _llm_text(prompt, max_tokens, json_mode=True)
     if text.startswith("```"):
         text = text.split("```")[1]
         if text.startswith("json"):
@@ -74,6 +98,14 @@ def feature_change_detection(state: AgentState) -> AgentState:
     Redis에 저장된 이전 User State와 현재 마이데이터를 비교합니다.
     변경이 없으면 needs_reanalysis=False → 캐시된 결과 반환.
     """
+    if state.get("scenario_options") is not None:
+        result = FeatureChangeResult(
+            has_change=True,
+            changed_fields=["scenario_options"],
+            summary="연금 수령방식 시나리오 재계산 요청"
+        )
+        return {**state, "feature_change": result, "needs_reanalysis": True}
+
     prev = _get_stored_state(state["customer_id"])
     curr = state["mydata_raw"]
 
@@ -425,10 +457,48 @@ def final_cashflow_calculation(state: AgentState) -> AgentState:
         dsr_now=features.get("dsr_now", 0),
         dsr_retire=features.get("dsr_retire", 0),
         portfolio_deviation=features.get("portfolio_deviation", 0),
-        shortfall_monthly=features.get("shortfall_monthly", 0)
+        shortfall_monthly=features.get("shortfall_monthly", 0),
+        income_gap_months=features.get("income_gap_months", 0),
+        life_expectancy_age=features.get("life_expectancy_age", 90),
+        retirement_total_shortfall_estimated=features.get("retirement_total_shortfall_estimated", 0),
+        retirement_total_shortfall_after_assets=features.get("retirement_total_shortfall_after_assets", 0),
     )
     print(f"[5] Final Calc — 부족액: {result.shortfall_monthly:,}원/월")
     return {**state, "calculation": result}
+
+
+# ══════════════════════════════════════════════════════════
+# [5.5] Pension Receipt Scenario Agent
+# ══════════════════════════════════════════════════════════
+
+def pension_receipt_scenario_agent(state: AgentState) -> AgentState:
+    """
+    Tool-calling style scenario agent.
+    The agent layer decides the standard receipt-method scenarios, then calls
+    deterministic tools to calculate lump-sum vs IRP annuity outcomes.
+    """
+    data = state["data_mapping"].mydata
+    features = state["cashflow_snapshot"].extracted_features
+    options = state.get("scenario_options")
+    target_monthly_expense = options.target_monthly_expense if options else features.get("monthly_expense_total", 0)
+    retirement_age = options.retirement_age if options else features.get("retirement_age", 60)
+
+    comparison = build_pension_receipt_scenarios(
+        data=data,
+        features=features,
+        target_monthly_expense=target_monthly_expense,
+        retirement_age=retirement_age,
+    )
+    result = ScenarioComparison(
+        target_monthly_expense=comparison["target_monthly_expense"],
+        retirement_age=comparison["retirement_age"],
+        scenarios=comparison["scenarios"],
+        recommended_scenario_id=comparison["recommended_scenario_id"],
+        recommendation_reason=comparison["recommendation_reason"],
+        tool_trace=comparison.get("tool_trace", []),
+    )
+    print(f"[5.5] Scenario Tools — 추천: {result.recommended_scenario_id}")
+    return {**state, "scenario_comparison": result}
 
 
 # ══════════════════════════════════════════════════════════
@@ -445,19 +515,62 @@ def dashboard_agent(state: AgentState) -> AgentState:
     persona = state["persona"]
     query   = state["query"]
     features = state["cashflow_snapshot"].extracted_features
+    scenario = state.get("scenario_comparison")
 
     # 연금 구성 분해
+    applied_public_pension_type = features.get("applied_public_pension_type", "국민연금")
     pension_breakdown = {
         p.pension_type: p.expected_monthly
         for p in mydata.pensions
+        if p.expected_monthly > 0 or p.current_value > 0
     }
+    pension_breakdown["공적연금(계산 적용)"] = features.get("public_pension_monthly", 0)
 
     # 목표 달성률
     achievement = round(calc.pension_replacement_rate, 1) if calc.pension_replacement_rate else 0
 
-    # 액션 아이템 생성 (Claude)
+    # RAG: 질문 + 주요 피처명 기준으로 관련 금융 용어 조회
+    rag_context = " ".join([
+        query,
+        persona.persona_label,
+        " ".join(persona.flags),
+        f"DSR IRP ETF 연금대체율 소득대체율 퇴직금 국민연금 개인연금 퇴직연금",
+        " ".join(str(k) for k in features.keys()),
+    ])
+    rag_terms = lookup_terms(rag_context)
+    term_glossary = format_term_glossary(rag_terms)
+
+    # 시나리오 데이터 요약 (raw dict 전체 대신 핵심 수치만 추출)
+    def _summarize_scenarios(sc) -> str:
+        if not sc:
+            return "없음"
+        lines = []
+        for s in sc.scenarios:
+            lines.append(
+                f"  [{s['title']}] "
+                f"월 수령액={s.get('monthly_pension_from_retirement_money', 0):,}원 | "
+                f"소득공백 생존여력={s.get('survival_months_gap', 0)}개월 | "
+                f"세금절감={s.get('total_tax_saving_vs_lump_sum', 0):,}원 | "
+                f"초기유동성={s.get('initial_liquidity', 0):,}원"
+            )
+        return "\n".join(lines)
+
+    scenario_summary = _summarize_scenarios(scenario)
+    recommended_id = scenario.recommended_scenario_id if scenario else ""
+    recommendation_reason = scenario.recommendation_reason if scenario else ""
+
+    # 액션 아이템 생성
     prompt = f"""
-연금 상담 AI입니다. 아래 분석을 바탕으로 사용자 답변 초안을 작성하세요. 한국어 3문단.
+연금 상담 AI입니다. 아래 분석을 바탕으로 사용자 답변 초안을 작성하세요.
+어려운 금융 용어는 괄호 안에 쉬운 설명을 덧붙여 주세요.
+
+출력 필수 규칙:
+1. 적용 공적연금 종류가 공무원연금/군인연금/사학연금이면 국민연금 0원을 문제처럼 말하지 말고, 해당 직역연금이 공적연금으로 적용된다고 설명하세요.
+2. [시나리오 비교] 섹션을 반드시 작성하고 각 수령방식의 핵심 차이를 비교하세요.
+3. 추천 시나리오와 추천 사유를 명확히 설명하세요.
+4. 숫자는 원인과 연결해서 설명하고, 사용자가 바로 이해할 수 있는 표현을 우선하세요.
+
+{term_glossary}
 
 질문: "{query}"
 페르소나: {persona.persona_label} (취약성 {persona.vulnerability_score}점)
@@ -468,20 +581,32 @@ def dashboard_agent(state: AgentState) -> AgentState:
 월 순현금흐름: {features.get("net_cashflow_monthly", 0):,}원
 사적연금 잔액: {features.get("private_pension_balance", 0):,}원
 대출잔액: {features.get("loan_balance_total", 0):,}원
-60세 기준 퇴직금 추정액: {features.get("retirement_lump_sum_estimated", 0):,}원
+대출 상세: {features.get("loan_details", [])}
+60세 기준 퇴직금/퇴직수당 추정액: {features.get("retirement_lump_sum_estimated", 0):,}원
+퇴직금/퇴직수당 산식 유형: {features.get("retirement_lump_sum_type", "")}
 은퇴 시점 근속연수: {features.get("service_years_at_retirement", 0)}년
-공적연금 수급 개시 나이: {features.get("public_pension_start_age", 0)}세
+즉시유동자산: {features.get("immediate_liquid_asset_total", 0):,}원
+준유동자산(해지 시나리오 대상): {features.get("semi_liquid_asset_total", 0):,}원
+비유동 계좌자산: {features.get("illiquid_account_asset_total", 0):,}원
+적용 공적연금 종류: {applied_public_pension_type}
+공적연금 수급 개시: {features.get("public_pension_start_age", 0)}세 / {features.get("public_pension_start_month", "")}
 공적연금 월수령 추정액: {features.get("public_pension_monthly", 0):,}원
+국민연금 추정액: {features.get("estimated_national_pension_monthly", 0):,}원
+직역연금 월수령액: {features.get("occupational_public_pension_monthly", 0):,}원
 연금 수령시기 조정 옵션: {features.get("pension_start_adjustment_options", {})}
 PensionReplacementRate: {features.get("PensionReplacementRate", 0)}%
+소득 공백기: {calc.income_gap_years}년({calc.income_gap_months}개월)
 60세 은퇴 직후 생존여력: {calc.survival_months_at_retirement}개월
 은퇴 후 생존여력: {calc.survival_months_retire}개월
+기대수명 기준 총 은퇴 부족액: {calc.retirement_total_shortfall_estimated:,}원
+가용자산 반영 후 잔여 부족액: {calc.retirement_total_shortfall_after_assets:,}원
+
+[수령방식 시나리오 비교]
+{scenario_summary}
+추천 시나리오: {recommended_id}
+추천 사유: {recommendation_reason}
 """
-    resp = client.chat.completions.create(
-        model=MODEL, max_tokens=700,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    draft = resp.choices[0].message.content
+    draft = _llm_text(prompt, 2000)
 
     action_items = []
     if calc.shortfall_monthly > 0:
@@ -498,8 +623,13 @@ PensionReplacementRate: {features.get("PensionReplacementRate", 0)}%
         timeline_data={
             "retirement_age": features.get("retirement_age", 60),
             "public_pension_start_age": features.get("public_pension_start_age", 0),
+            "public_pension_start_month": features.get("public_pension_start_month", ""),
             "income_gap_years": calc.income_gap_years,
+            "income_gap_months": calc.income_gap_months,
             "PensionReplacementRate": calc.pension_replacement_rate,
+            "retirement_total_shortfall_estimated": calc.retirement_total_shortfall_estimated,
+            "retirement_total_shortfall_after_assets": calc.retirement_total_shortfall_after_assets,
+            "rag_terms": rag_terms,
         }
     )
     print(f"[6] Dashboard — 달성률: {achievement}% | 액션: {len(action_items)}개")
@@ -540,7 +670,7 @@ def guardrail_agent(state: AgentState) -> AgentState:
   "safe_response": "수정된 최종 답변"
 }}
 """
-    d = _llm(prompt, 900)
+    d = _llm(prompt, 1800)
     result = GuardRailResult(
         passed=d["passed"],
         blocked_phrases=d.get("blocked_phrases", []),

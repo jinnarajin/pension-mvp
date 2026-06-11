@@ -16,6 +16,7 @@ import pytest
 
 import agents  # imports redis_client at module load — patched below
 from mydata_schema import PERSONA_A
+from state import ScenarioOptions
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +38,7 @@ def base_state(mydata_raw):
         "query": "test",
         "mydata_raw": mydata_raw,
         "cfpb_input": None,
+        "scenario_options": None,
         "feature_change": None,
         "needs_reanalysis": True,
         "data_mapping": None,
@@ -44,6 +46,7 @@ def base_state(mydata_raw):
         "routing": None,
         "persona": None,
         "calculation": None,
+        "scenario_comparison": None,
         "dashboard": None,
         "guardrail": None,
         "final_response": None,
@@ -81,6 +84,17 @@ def test_no_change_skips_reanalysis(base_state, fake_redis):
     assert out["needs_reanalysis"] is False
 
 
+def test_scenario_options_force_reanalysis(base_state, fake_redis):
+    fake_redis.set("user_state:PA-0001", json.dumps({"monthly_cashflow": 1_289_333}), ex=86400)
+    state = {
+        **base_state,
+        "scenario_options": ScenarioOptions(retirement_age=62, target_monthly_expense=4_000_000),
+    }
+    out = agents.feature_change_detection(state)
+    assert out["needs_reanalysis"] is True
+    assert "scenario_options" in out["feature_change"].changed_fields
+
+
 # ── backend_data_mapping ────────────────────────────────────
 
 def test_data_mapping_parses_persona_a(base_state):
@@ -105,12 +119,17 @@ def test_cashflow_snapshot_aggregates_from_monthly(base_state):
     assert snap.monthly_income == 5_622_666
     assert snap.monthly_expense == 4_333_333
     assert snap.monthly_cashflow == 1_289_333
-    assert snap.liquid_assets == 92_340_000
+    assert snap.liquid_assets == 27_340_000
     assert snap.extracted_features["private_pension_balance"] == 60_300_000
     assert snap.extracted_features["public_pension_contribution_total"] == 135_200_000
     assert snap.extracted_features["retirement_age"] == 60
     assert snap.extracted_features["service_years_at_retirement"] == 34
-    assert snap.extracted_features["retirement_lump_sum_estimated"] == 157_080_000
+    assert snap.extracted_features["retirement_lump_sum_estimated"] == 61_261_200
+    assert snap.extracted_features["retirement_lump_sum_type"] == "civil_servant_retirement_allowance"
+    assert snap.extracted_features["applied_public_pension_type"] == "공무원연금"
+    assert snap.extracted_features["public_pension_monthly"] == 1_850_000
+    assert snap.extracted_features["semi_liquid_asset_total"] == 58_800_000
+    assert snap.extracted_features["public_pension_start_month"] == "2032-04"
     assert "switch_score" not in snap.extracted_features
 
 
@@ -155,6 +174,41 @@ def test_final_cashflow_returns_all_fields(base_state):
     calc = out["calculation"]
     assert calc.shortfall_monthly >= 0
     assert calc.pension_replacement_rate >= 0
+
+
+def test_pension_receipt_scenario_agent_returns_comparison(base_state):
+    s = agents.final_cashflow_calculation(
+        agents.supervisor_agent_check(
+            agents.cashflow_snapshot(agents.backend_data_mapping(base_state))
+        )
+    )
+    out = agents.pension_receipt_scenario_agent(s)
+    comparison = out["scenario_comparison"]
+    assert comparison.recommended_scenario_id
+    assert len(comparison.scenarios) == 4
+    assert comparison.scenarios[0]["scenario_id"] == "lump_sum"
+    assert comparison.scenarios[0]["full_period_shortfall_monthly"] < comparison.scenarios[0]["gap_period_shortfall_monthly"]
+    assert comparison.tool_trace[0]["tool"] == "calculate_lump_sum_receipt"
+
+
+def test_dashboard_preserves_occupational_pension_and_exposes_rag_terms(base_state, monkeypatch):
+    s = agents.supervisor_agent_check(
+        agents.cashflow_snapshot(agents.backend_data_mapping(base_state))
+    )
+    s = agents.question_routing_agent(s)
+    s = agents.persona_classifier(s)
+    s = agents.final_cashflow_calculation(s)
+    s = agents.pension_receipt_scenario_agent(s)
+    monkeypatch.setattr(agents, "_llm_text", lambda prompt, max_tokens=700: prompt)
+
+    out = agents.dashboard_agent(s)
+    dashboard = out["dashboard"]
+
+    assert dashboard.pension_breakdown["공무원연금"] == 1_850_000
+    assert dashboard.pension_breakdown["공적연금(계산 적용)"] == 1_850_000
+    assert dashboard.timeline_data["rag_terms"]
+    assert "연금 수령방식 시나리오 tool 결과" in out["final_response"]
+    assert "추천 시나리오" in out["final_response"]
 
 
 # ── update_user_state ───────────────────────────────────────

@@ -25,6 +25,36 @@ export interface AiAgentExtras {
   retire_age?: number;
 }
 
+export interface ScenarioResult {
+  scenario_id: string;
+  title: string;
+  receipt_method: string;
+  payout_years?: number;
+  has_existing_irp?: boolean;
+  gross_retirement_payout: number;
+  estimated_tax_total: number;
+  after_tax_retirement_payout: number;
+  monthly_pension_from_retirement_money: number;
+  monthly_tax_saving_vs_lump_sum: number;
+  total_tax_saving_vs_lump_sum: number;
+  initial_liquidity: number;
+  survival_months_gap: number;
+  survival_months_full: number;
+  gap_period_shortfall_monthly: number;
+  full_period_shortfall_monthly: number;
+  tax_advisory: string[];
+  risk_flags: string[];
+}
+
+export interface ScenarioComparison {
+  target_monthly_expense: number;
+  retirement_age: number;
+  scenarios: ScenarioResult[];
+  recommended_scenario_id: string;
+  recommendation_reason: string;
+  tool_trace: Array<Record<string, string>>;
+}
+
 // CFPB 약식 5문항 응답 슬러그 — cfpb_fwb_scorer.py의 P1/P2와 매칭
 export type CfpbP1Answer = "completely" | "very_well" | "somewhat" | "very_little" | "not_at_all";
 export type CfpbP2Answer = "always" | "often" | "sometimes" | "rarely" | "never";
@@ -63,6 +93,7 @@ export interface AnalyzeResponse {
   fwb_score: number;
   fwb_confidence: "indicative" | "validated";
   rationale: string;
+  scenario_comparison?: ScenarioComparison;
 }
 
 export interface PersonaSummary {
@@ -102,11 +133,14 @@ export function pensionInputFromMyData(d: MyDataPayload): PensionInput {
   const pickPension = (type: string) =>
     pensions.filter((p) => p.pension_type === type)
             .reduce((sum, p) => sum + (p.expected_monthly ?? 0), 0);
+  const pickAnyPension = (types: string[]) =>
+    pensions.filter((p) => types.includes(p.pension_type))
+            .reduce((sum, p) => sum + (p.expected_monthly ?? 0), 0);
 
   return {
-    nationalPension: pickPension("국민연금"),
+    nationalPension: pickAnyPension(["국민연금", "공무원연금", "군인연금", "사학연금"]),
     retirementPension: pickPension("퇴직연금") + pickPension("IRP"),
-    privatePension: pickPension("개인연금"),
+    privatePension: pickAnyPension(["개인연금", "개인연금저축"]),
     targetMonthlyCost: dashboard.monthly_expense_avg,
     currentMonthlyLivingCost: dashboard.monthly_expense_avg,
     deposit: accounts.reduce((s, a) => s + (a.balance ?? 0), 0),
@@ -129,11 +163,15 @@ export async function fetchAiDiagnosis(
   const query = extras.query ?? "현재 노후 준비 상태를 진단하고 갈아타기가 필요한지 알려주세요.";
 
   const mydata_raw = mydataOverride ?? buildMyDataFromForm(input, extras);
+  const scenario_options = {
+    retirement_age: extras.retire_age ?? Math.max((extras.age ?? 50) + 1, 60),
+    target_monthly_expense: input.targetMonthlyCost,
+  };
 
   const r = await fetch(`${API_URL}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customer_id, query, mydata_raw, cfpb }),
+    body: JSON.stringify({ customer_id, query, mydata_raw, cfpb, scenario_options }),
   });
 
   if (!r.ok) {
@@ -149,6 +187,7 @@ function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyData
   const age = extras.age ?? 50;
   const retire_age = extras.retire_age ?? Math.max(age + 1, 60);
   const years_to_retire = Math.max(0, retire_age - age);
+  const service_years_current = Math.max(0, age - 27);
   const retire_year = new Date().getFullYear() + years_to_retire;
   const national_start_year = retire_year + Math.max(0, 65 - retire_age);
 
@@ -166,6 +205,8 @@ function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyData
     total_income: monthly_income,
     total_expense: monthly_expense,
     cashflow: monthly_cashflow,
+    salary_income: monthly_income,
+    loan_repayment: monthly_loan_payment,
   }));
 
   return {
@@ -178,6 +219,7 @@ function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyData
       retire_date: `${retire_year}-12-31`,
       risk_tolerance: extras.risk_tolerance ?? "중립형",
       core_anxiety: "프론트엔드 폼 입력 기반 추정 진단",
+      service_years_current,
     },
     monthly_summaries,
     transactions: [],
@@ -194,7 +236,7 @@ function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyData
         current_yield: 0,
       },
       {
-        pension_type: "퇴직연금",
+        pension_type: "IRP",
         provider: "미상",
         current_value: input.retirementPension * 120,
         expected_monthly: input.retirementPension,

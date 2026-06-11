@@ -95,8 +95,8 @@ export default function App() {
   }, [step]);
 
   // When a built-in persona is loaded, we keep its full MyData payload so the
-  // /analyze call can replay it verbatim (matches the backend smoke test).
-  // Editing any form field clears this — see handleChange below.
+  // /analyze call can replay it verbatim. Scenario inputs such as target living
+  // cost should override calculation options without discarding the persona.
   const [aiPayload, setAiPayload] = useState<MyDataPayload | null>(null);
   const [aiExtras, setAiExtras] = useState<AiAgentExtras>({
     age: 50,
@@ -273,9 +273,9 @@ export default function App() {
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const raw = e.target.value.replace(/[^0-9]/g, ""); // digits only
       setInput((prev) => ({ ...prev, [key]: raw === "" ? 0 : Number(raw) }));
-      // User edited the form — discard any loaded persona payload so the next
-      // AI call synthesizes from the (now-divergent) form values.
-      setAiPayload(null);
+      if (key !== "targetMonthlyCost" && key !== "currentMonthlyLivingCost") {
+        setAiPayload(null);
+      }
     };
 
   async function handleLoadPersona(id: string) {
@@ -292,6 +292,7 @@ export default function App() {
       setAiExtras({
         customer_id: id,
         age: profile.age,
+        retire_age: Math.max(profile.age + 1, 60),
         risk_tolerance: profile.risk_tolerance,
         job_type: profile.job_type,
       });
@@ -481,6 +482,18 @@ export default function App() {
               />
             </label>
             <label className="ai-extra-field">
+              <span>은퇴나이</span>
+              <input
+                type="number"
+                min={40}
+                max={90}
+                value={aiExtras.retire_age ?? Math.max((aiExtras.age ?? 50) + 1, 60)}
+                onChange={(e) =>
+                  setAiExtras((prev) => ({ ...prev, retire_age: Number(e.target.value) || 60 }))
+                }
+              />
+            </label>
+            <label className="ai-extra-field">
               <span>위험 성향</span>
               <select
                 value={aiExtras.risk_tolerance ?? "중립형"}
@@ -562,6 +575,54 @@ export default function App() {
                   highlight
                 />
               </ul>
+
+              {aiState.data.scenario_comparison?.scenarios?.length ? (
+                <>
+                  <h3 style={{ marginTop: 16, fontSize: 15 }}>연금 수령방식 시나리오</h3>
+                  <p style={{ fontSize: 12, color: "#aab1bf", lineHeight: 1.5 }}>
+                    추천: {aiState.data.scenario_comparison.recommended_scenario_id} ·{" "}
+                    {aiState.data.scenario_comparison.recommendation_reason}
+                  </p>
+                  <ol className="action-list">
+                    {aiState.data.scenario_comparison.scenarios.map((scenario) => (
+                      <li key={scenario.scenario_id}>
+                        <strong>{scenario.title}</strong>
+                        <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5 }}>
+                          월 수령액 {formatKRW(scenario.monthly_pension_from_retirement_money)} ·
+                          초기 유동성 {formatKRW(scenario.initial_liquidity)} ·
+                          공백기 생존여력 {scenario.survival_months_gap}개월
+                        </div>
+                        <div style={{ marginTop: 4, fontSize: 12, color: "#aab1bf", lineHeight: 1.5 }}>
+                          예상 세금 {formatKRW(scenario.estimated_tax_total)} ·
+                          일시금 대비 절세 {formatKRW(scenario.total_tax_saving_vs_lump_sum)}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              ) : null}
+
+              {(() => {
+                const terms = aiState.data.dashboard.timeline_data.rag_terms as
+                  | Record<string, string>
+                  | undefined;
+                if (!terms || Object.keys(terms).length === 0) return null;
+                return (
+                  <>
+                    <h3 style={{ marginTop: 16, fontSize: 15 }}>금융 용어 참고</h3>
+                    <ul className="kv-list">
+                      {Object.entries(terms).map(([term, explanation]) => (
+                        <li key={term}>
+                          <span>{term}</span>
+                          <strong style={{ textAlign: "right", maxWidth: "58%", lineHeight: 1.35 }}>
+                            {explanation}
+                          </strong>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                );
+              })()}
             </div>
           )}
         </section>

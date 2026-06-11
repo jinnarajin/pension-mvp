@@ -43,6 +43,7 @@ class Profile:
     spouse_income_flag: str = ""
     housing_ownership_status: str = ""
     service_years_current: int = 0
+    life_expectancy_age: int = 90
 
 
 # ── 02 monthly_summaries ──────────────────────────────────
@@ -90,6 +91,8 @@ class Account:
     account_type: str           # "보통예금", "정기예금", "CMA" 등
     balance: int
     currency: str = "KRW"
+    interest_rate: float = 0.0  # 약정 금리 또는 예상 수익률 (%)
+    maturity_date: str = ""     # "YYYY-MM-DD", 중도해지 손실 시나리오 입력값
 
 
 # ── 05 pensions ───────────────────────────────────────────
@@ -126,6 +129,11 @@ class Loan:
     balance: int                # 남은 원금
     monthly_payment: int        # 월 상환액
     interest_rate: float        # 연이율 (%)
+    interest_type: str = "고정금리"
+    repayment_method: str = "원리금균등"
+    monthly_payment_day: int = 0
+    annual_payment: int = 0
+    maturity_date: str = ""     # "YYYY-MM-DD"
 
 
 # ── 08 insurances ─────────────────────────────────────────
@@ -239,6 +247,7 @@ PERSONA_A_PROFILE = Profile(
     spouse_income_flag="Y",
     housing_ownership_status="자가",
     service_years_current=31,
+    life_expectancy_age=90,
 )
 
 PERSONA_A_MONTHLY = [
@@ -351,16 +360,16 @@ PERSONA_A_TX = [
 ]
 
 PERSONA_A_ACCOUNTS = [
-    Account(bank_name="전북은행", account_type="입출금", balance=18_240_000),
-    Account(bank_name="농협은행", account_type="정기예금", balance=42_000_000),
-    Account(bank_name="전북은행", account_type="적금", balance=16_800_000),
-    Account(bank_name="한국투자증권", account_type="CMA", balance=9_100_000),
-    Account(bank_name="전북은행", account_type="청약저축", balance=6_200_000),
+    Account(bank_name="전북은행", account_type="입출금", balance=18_240_000, interest_rate=0.1),
+    Account(bank_name="농협은행", account_type="정기예금", balance=42_000_000, interest_rate=3.2, maturity_date="2026-10-04"),
+    Account(bank_name="전북은행", account_type="적금", balance=16_800_000, interest_rate=3.5, maturity_date="2027-03-15"),
+    Account(bank_name="한국투자증권", account_type="CMA", balance=9_100_000, interest_rate=2.4),
+    Account(bank_name="전북은행", account_type="청약저축", balance=6_200_000, interest_rate=2.1),
 ]
 
 PERSONA_A_PENSIONS = [
     Pension(pension_type="공무원연금", provider="공무원연금공단", current_value=0,
-            expected_monthly=1_850_000, expected_start="2030-01",
+            expected_monthly=1_850_000, expected_start="2032-04",
             contribution_total=132_000_000, scheme_group="public_occupational",
             status="재직 중", note="현 재직 기준 핵심 공적연금"),
     Pension(pension_type="국민연금", provider="국민연금공단", current_value=0,
@@ -385,8 +394,12 @@ PERSONA_A_INVESTMENTS = [
 ]
 
 PERSONA_A_LOANS = [
-    Loan(loan_type="주택담보대출", balance=32_600_000, monthly_payment=702_000, interest_rate=4.1),
-    Loan(loan_type="생활안정자금", balance=8_200_000, monthly_payment=281_000, interest_rate=3.4),
+    Loan(loan_type="주택담보대출", balance=32_600_000, monthly_payment=702_000,
+         interest_rate=4.1, interest_type="고정금리", repayment_method="원리금균등",
+         monthly_payment_day=15, annual_payment=8_424_000, maturity_date="2030-09-15"),
+    Loan(loan_type="생활안정자금", balance=8_200_000, monthly_payment=281_000,
+         interest_rate=3.4, interest_type="고정금리", repayment_method="원리금균등",
+         monthly_payment_day=20, annual_payment=3_372_000, maturity_date="2029-01-20"),
 ]
 
 PERSONA_A_INSURANCES = [
@@ -483,7 +496,9 @@ PERSONA_B_INVESTMENTS = [
 ]
 
 PERSONA_B_LOANS = [
-    Loan(loan_type="전세자금대출", balance=120_000_000, monthly_payment=680_000, interest_rate=4.5),
+    Loan(loan_type="전세자금대출", balance=120_000_000, monthly_payment=680_000,
+         interest_rate=4.5, interest_type="고정금리", repayment_method="원리금균등",
+         monthly_payment_day=25, annual_payment=8_160_000, maturity_date="2050-08-25"),
 ]
 
 PERSONA_B_INSURANCES = [
