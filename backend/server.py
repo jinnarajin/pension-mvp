@@ -17,6 +17,11 @@ load_dotenv()
 
 from graph import run_pipeline, build_graph
 from mydata_schema import MyDataInput, PERSONA_A, PERSONA_B
+from api_views import (
+    build_asset_projection_dashboard,
+    build_status_check,
+    select_custom_questions,
+)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 # Vite picks the next free port if 5173 is taken (5174, 5175…), so we allow
@@ -59,6 +64,16 @@ class AnalyzeRequest(BaseModel):
     cfpb: CFPBPayload | None = None     # CFPB 약식 5문항 응답 (선택)
     cfpb_input: CFPBPayload | None = None  # 프론트 호환 alias
     scenario_options: dict | None = None
+
+
+class MyDataApiRequest(BaseModel):
+    customer_id: str
+    mydata_raw: dict
+
+
+class ResultDashboardRequest(MyDataApiRequest):
+    retirement_age: int | None = None
+    target_monthly_expense: int | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -134,6 +149,46 @@ async def analyze(req: AnalyzeRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "pension-ai-agent"}
+
+
+@app.post("/status-check")
+async def status_check(req: MyDataApiRequest):
+    """현황확인: 예상 월 연금, 금융 총액 자산, 대출 잔액 총액, 현재 월 생활비."""
+    try:
+        return {
+            "customer_id": req.customer_id,
+            **build_status_check(req.mydata_raw),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/custom-questions")
+async def custom_questions(req: MyDataApiRequest):
+    """맞춤 질문: 현재 스냅샷 기반으로 question pool에서 정확히 5개 선택."""
+    try:
+        return {
+            "customer_id": req.customer_id,
+            **select_custom_questions(req.mydata_raw, limit=5),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/result-dashboard")
+async def result_dashboard(req: ResultDashboardRequest):
+    """결과 대시보드: 카드 값과 연령별 자산 변화 그래프용 시계열."""
+    try:
+        return {
+            "customer_id": req.customer_id,
+            **build_asset_projection_dashboard(
+                req.mydata_raw,
+                retirement_age=req.retirement_age,
+                target_monthly_expense=req.target_monthly_expense,
+            ),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/personas/{persona_id}")

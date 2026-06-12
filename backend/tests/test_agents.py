@@ -207,7 +207,7 @@ def test_dashboard_preserves_occupational_pension_and_exposes_rag_terms(base_sta
     assert dashboard.pension_breakdown["공무원연금"] == 1_850_000
     assert dashboard.pension_breakdown["공적연금(계산 적용)"] == 1_850_000
     assert dashboard.timeline_data["rag_terms"]
-    assert "연금 수령방식 시나리오 tool 결과" in out["final_response"]
+    assert "[수령방식 시나리오 비교]" in out["final_response"]
     assert "추천 시나리오" in out["final_response"]
 
 
@@ -242,7 +242,7 @@ def test_create_review_case_high_vulnerability(base_state):
         ),
         "calculation": CashflowCalculation(
             pension_replacement_rate=40, survival_months_at_retirement=10, survival_months_retire=5,
-            income_gap_years=5, dsr_now=15, dsr_retire=25, portfolio_deviation=10,
+            income_gap_years=5, dsr_now=15, dsr_retire=25,
             shortfall_monthly=500_000,
         ),
         "data_mapping": agents.backend_data_mapping(base_state)["data_mapping"],
@@ -262,7 +262,7 @@ def test_create_review_case_skipped_when_safe(base_state):
         ),
         "calculation": CashflowCalculation(
             pension_replacement_rate=70, survival_months_at_retirement=20, survival_months_retire=18,
-            income_gap_years=2, dsr_now=10, dsr_retire=12, portfolio_deviation=5,
+            income_gap_years=2, dsr_now=10, dsr_retire=12,
             shortfall_monthly=0,
         ),
         "data_mapping": agents.backend_data_mapping(base_state)["data_mapping"],

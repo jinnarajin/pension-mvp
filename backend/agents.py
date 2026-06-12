@@ -215,8 +215,6 @@ def supervisor_agent_check(state: AgentState) -> AgentState:
     anomalies = []
     if features.get("survival_months_retire", 99) < 6:
         anomalies.append("은퇴 후 생존여력 6개월 미만 — 긴급 검토 필요")
-    if features.get("invest_risk_ratio", 0) > 80:
-        anomalies.append("고위험 투자 비중 80% 초과")
     if snap.monthly_cashflow < 0:
         anomalies.append("월 현금흐름 적자")
 
@@ -456,7 +454,6 @@ def final_cashflow_calculation(state: AgentState) -> AgentState:
         income_gap_years=features.get("income_gap_years", 0),
         dsr_now=features.get("dsr_now", 0),
         dsr_retire=features.get("dsr_retire", 0),
-        portfolio_deviation=features.get("portfolio_deviation", 0),
         shortfall_monthly=features.get("shortfall_monthly", 0),
         income_gap_months=features.get("income_gap_months", 0),
         life_expectancy_age=features.get("life_expectancy_age", 90),
@@ -580,6 +577,9 @@ def dashboard_agent(state: AgentState) -> AgentState:
 월 총지출: {features.get("monthly_expense_total", 0):,}원
 월 순현금흐름: {features.get("net_cashflow_monthly", 0):,}원
 사적연금 잔액: {features.get("private_pension_balance", 0):,}원
+IRP 월 납입액: {features.get("irp_contribution_monthly", 0):,}원
+연금저축 월 납입액: {features.get("pension_savings_contribution_monthly", 0):,}원
+사적연금 월 납입 합계: {features.get("private_pension_contribution_monthly", 0):,}원
 대출잔액: {features.get("loan_balance_total", 0):,}원
 대출 상세: {features.get("loan_details", [])}
 60세 기준 퇴직금/퇴직수당 추정액: {features.get("retirement_lump_sum_estimated", 0):,}원
@@ -606,13 +606,11 @@ PensionReplacementRate: {features.get("PensionReplacementRate", 0)}%
 추천 시나리오: {recommended_id}
 추천 사유: {recommendation_reason}
 """
-    draft = _llm_text(prompt, 2000)
+    draft = _llm_text(prompt, 1500)
 
     action_items = []
     if calc.shortfall_monthly > 0:
         action_items.append(f"월 {calc.shortfall_monthly//10000}만원 추가 납입 필요")
-    if calc.portfolio_deviation > 15:
-        action_items.append(f"포트폴리오 재조정 권장 (괴리도 {calc.portfolio_deviation:.1f}%p)")
     if calc.survival_months_retire < 12:
         action_items.append(f"은퇴 후 생존여력 {calc.survival_months_retire:.1f}개월 — 긴급 대비 필요")
 
