@@ -12,7 +12,16 @@
       "Bash(docker rm *)",
       "Bash(env)",
       "Bash(printenv ANTHROPIC_API_KEY)",
-      "Bash(awk -F= '/^OPENAI_API_KEY=/ {print substr\\($2,1,10\\) \"...\\(len=\" length\\($2\\) \"\\)\"}' /Users/seojin/Documents/projects/JDgroup/pension-mvp/backend/.env)"
+      "Bash(awk -F= '/^OPENAI_API_KEY=/ {print substr\\($2,1,10\\) \"...\\(len=\" length\\($2\\) \"\\)\"}' /Users/seojin/Documents/projects/JDgroup/pension-mvp/backend/.env)",
+      "Bash(brew services *)",
+      "Bash(colima start *)",
+      "Bash(colima status *)",
+      "Read(//Users/seojin/.colima/_lima/colima/**)",
+      "Bash(docker compose *)",
+      "Bash(docker --version)",
+      "Bash(docker-compose version *)",
+      "Bash(docker start *)",
+      "Bash(curl -s http://localhost:8000/personas)"
     ]
   }
 }
