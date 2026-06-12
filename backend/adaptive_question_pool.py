@@ -395,7 +395,7 @@ FINANCIAL_LITERACY_QUESTIONS: list[QuestionPoolItem] = [
         response_scale="true_false_unknown",
         options=["맞다", "틀리다", "잘 모르겠다"],
         vulnerability_targets=["diversification_literacy"],
-        selection_hints=["investment_products_present", "portfolio_deviation_high"],
+        selection_hints=["investment_products_present"],
     ),
     QuestionPoolItem(
         id="QK7_5",
@@ -431,7 +431,7 @@ def select_adaptive_questions_todo(features: dict, question_pool: list[QuestionP
       - profile/user features: age, employment_status, household_size, job_type
       - calculated metrics: net_cashflow_monthly, liquid_asset_total,
         PensionReplacementRate, survival_months_at_retirement, income_gap_years,
-        dsr_retire, portfolio_deviation, shortfall_monthly, invest_risk_ratio
+        dsr_retire, shortfall_monthly
       - product data: pensions/accounts/loans/investments presence
 
     Selection sketch:

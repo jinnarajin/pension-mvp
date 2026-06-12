@@ -9,7 +9,8 @@ from mydata_schema import MyDataInput
 
 
 RETIREMENT_AGE = 60
-DEFAULT_LIFE_EXPECTANCY_AGE = 90
+LIFE_EXPECTANCY_MALE   = 80.0
+LIFE_EXPECTANCY_FEMALE = 86.2
 CIVIL_SERVANT_RETIREMENT_ALLOWANCE_RATE_TABLE = [
     (1, 5, 0.065),
     (5, 10, 0.2275),
@@ -242,11 +243,9 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
           survival_months_retire,              # 은퇴 후 생존 여력
           income_gap_years,                    # 소득 공백기
           dsr_now, dsr_retire,                 # DSR 재직 중 / 은퇴 후
-          portfolio_deviation,                 # 포트폴리오 괴리도
           insurance_burden_retire,             # 보험료 은퇴 후 부담률
           pension_asset_ratio,                 # 연금자산 집중도
           shortfall_monthly,                   # 월 부족액
-          invest_risk_ratio,                   # 고위험 투자 비중
         }
     """
     p = data.profile
@@ -341,6 +340,21 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
     public_pension_contribution_total = sum(
         pension.contribution_total for pension in pen
         if pension.scheme_group.startswith("public") or pension.pension_type in ("국민연금", "공무원연금")
+    )
+    irp_contribution_monthly = sum(
+        pension.monthly_contribution for pension in pen
+        if pension.pension_type == "IRP"
+    )
+    pension_savings_contribution_monthly = sum(
+        pension.monthly_contribution for pension in pen
+        if pension.pension_type in ("개인연금", "개인연금저축", "연금저축", "연금저축펀드")
+    ) + sum(
+        item.monthly_premium for item in ins
+        if item.is_private_pension == "Y" or "연금저축" in item.insurance_type
+    )
+    private_pension_contribution_monthly = (
+        irp_contribution_monthly
+        + pension_savings_contribution_monthly
     )
 
     # ── D. 은퇴 기준 나이·근속·퇴직금/퇴직수당 추정 ───
@@ -480,7 +494,12 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
     if income_gap_months == 0:
         income_gap_months = max(0, public_pension_start_age - RETIREMENT_AGE) * 12
     income_gap_years = round(income_gap_months / 12, 1)
-    life_expectancy_age = p.life_expectancy_age or DEFAULT_LIFE_EXPECTANCY_AGE
+    if p.life_expectancy_age:
+        life_expectancy_age = float(p.life_expectancy_age)
+    elif p.gender == "여":
+        life_expectancy_age = LIFE_EXPECTANCY_FEMALE
+    else:
+        life_expectancy_age = LIFE_EXPECTANCY_MALE
     post_public_pension_months = max(0, life_expectancy_age - public_pension_start_age) * 12
     retirement_total_shortfall_estimated = int(
         income_gap_months * gap_period_deficit
@@ -498,19 +517,7 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
     dsr_now    = round(total_monthly_loan / monthly_income_total * 100, 1) if monthly_income_total > 0 else 0
     dsr_retire = round(total_monthly_loan / total_pension_full * 100, 1) if total_pension_full > 0 else 0
 
-    # ── 5. 포트폴리오 괴리도 ────────────────────────────
-    # 실제 주식성 자산 비중이 나이 기반 간이 적정 주식비중보다 얼마나 높은지 본다.
-    # 양수이면 주식성 자산이 기준보다 많고, 음수이면 기준보다 적다.
-    total_invest = sum(iv.current_value for iv in inv)
-    stock_value  = sum(
-        iv.current_value for iv in inv
-        if iv.product_type in ("ETF", "개별주식")
-    )
-    actual_stock_ratio  = round(stock_value / total_invest * 100, 1) if total_invest > 0 else 0
-    optimal_stock_ratio = max(0, 100 - max(p.age, RETIREMENT_AGE))     # 60세 은퇴 기준 간이 룰
-    portfolio_deviation = round(actual_stock_ratio - optimal_stock_ratio, 1)
-
-    # ── 6. 보험료 은퇴 후 부담률 ────────────────────────
+    # ── 5. 보험료 은퇴 후 부담률 ────────────────────────
     # 공적연금 개시 전 gap구간의 사적연금 소득 대비 보장성 보험료 부담률.
     # 은퇴 직후 현금흐름에서 보험료가 과도한지 보기 위한 보조 지표다.
     total_insurance_premium = insurance_premium_monthly
@@ -518,25 +525,17 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         total_insurance_premium / total_pension_gap * 100, 1
     ) if total_pension_gap > 0 else 0
 
-    # ── 7. 연금자산 집중도 ───────────────────────────────
+    # ── 6. 연금자산 집중도 ───────────────────────────────
     # 순자산 중 사적연금·퇴직연금성 자산이 차지하는 비중.
     # 연금자산에 과도하게 묶여 있는지, 또는 연금 준비가 부족한지 보는 보조 지표다.
     pension_value = private_pension_balance
     net_worth = max(0, total_asset_estimated - loan_balance_total) or db.net_worth
     pension_asset_ratio = round(pension_value / net_worth * 100, 1) if net_worth > 0 else 0
 
-    # ── 8. 월 부족액 ───────────────────────────────────
+    # ── 7. 월 부족액 ───────────────────────────────────
     # 공적연금까지 모두 받는 정상 은퇴 구간에서 월 지출이 월 연금소득을 초과하는 금액.
     # dashboard action item과 실무자 검토 라우팅의 주요 입력이다.
     shortfall_monthly = full_retire_deficit
-
-    # ── 9. 고위험 투자 비중 ─────────────────────────────
-    # 투자상품 중 risk_tag에 "높음"이 들어간 상품의 평가금액 비중.
-    # Supervisor Agent의 고위험 투자 anomaly 판단에 사용된다.
-    high_risk_value = sum(
-        iv.current_value for iv in inv if "높음" in iv.risk_tag
-    )
-    invest_risk_ratio = round(high_risk_value / total_invest * 100, 1) if total_invest > 0 else 0
 
     return {
         "age":                         p.age,
@@ -581,6 +580,12 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         "debt_service_ratio":          debt_service_ratio,
         "public_pension_contribution_total": public_pension_contribution_total,
         "private_pension_balance":     private_pension_balance,
+        "irp_contribution_monthly":    irp_contribution_monthly,
+        "irp_contribution_annual":     irp_contribution_monthly * 12,
+        "pension_savings_contribution_monthly": pension_savings_contribution_monthly,
+        "pension_savings_contribution_annual": pension_savings_contribution_monthly * 12,
+        "private_pension_contribution_monthly": private_pension_contribution_monthly,
+        "private_pension_contribution_annual": private_pension_contribution_monthly * 12,
         "private_pension_monthly":     private_pension_monthly,
         "public_pension_monthly":      public_pension_monthly,
         "applied_public_pension_type": applied_public_pension_type,
@@ -605,9 +610,7 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         "retirement_total_shortfall_after_assets": retirement_total_shortfall_after_assets,
         "dsr_now":                 dsr_now,
         "dsr_retire":              dsr_retire,
-        "portfolio_deviation":     portfolio_deviation,
         "insurance_burden_retire": insurance_burden_retire,
         "pension_asset_ratio":     pension_asset_ratio,
         "shortfall_monthly":       int(shortfall_monthly),
-        "invest_risk_ratio":       invest_risk_ratio,
     }

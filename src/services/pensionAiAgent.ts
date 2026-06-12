@@ -234,6 +234,7 @@ function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyData
         expected_monthly: input.nationalPension,
         expected_start: `${national_start_year}-01`,
         current_yield: 0,
+        monthly_contribution: 0,
       },
       {
         pension_type: "IRP",
@@ -242,6 +243,7 @@ function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyData
         expected_monthly: input.retirementPension,
         expected_start: `${retire_year}-01`,
         current_yield: 2.0,
+        monthly_contribution: 0,
       },
       {
         pension_type: "개인연금",
@@ -250,6 +252,7 @@ function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyData
         expected_monthly: input.privatePension,
         expected_start: `${retire_year}-01`,
         current_yield: 3.0,
+        monthly_contribution: 0,
       },
     ],
     investments: [],
