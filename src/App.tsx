@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import "./App.css";
+import { Analyzing } from "./components/Analyzing";
+import { DataConsent } from "./components/DataConsent";
+import { Dashboard } from "./components/Dashboard";
+import { Onboarding } from "./components/Onboarding";
+import { Questions } from "./components/Questions";
+import { Snapshot } from "./components/Snapshot";
 import type { PensionInput } from "./models/pension";
 import { diagnose, formatKRW, formatPercent } from "./services/pensionCalculator";
 import {
@@ -13,17 +19,12 @@ import {
 type Screen =
   | "onboarding"
   | "consent"
+  | "snapshot"
   | "questions"
   | "analyzing"
   | "dashboard"
   | "report"
   | "actions";
-
-const ANALYSIS_MESSAGES = [
-  "연금 정보를 모으고 있어요",
-  "노후 현금흐름을 계산하고 있어요",
-  "맞춤 실행 계획을 만들고 있어요",
-];
 
 const DEFAULT_INPUT: PensionInput = {
   nationalPension: 700000,
@@ -37,6 +38,7 @@ const DEFAULT_INPUT: PensionInput = {
 
 const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   consent: "정보 연결",
+  snapshot: "데이터 확인",
   questions: "간단 질문",
   analyzing: "AI 분석",
   dashboard: "진단 결과",
@@ -44,47 +46,35 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   actions: "실행 계획",
 };
 
-const moneyFields: Array<{
-  key: keyof PensionInput;
-  label: string;
-  help: string;
-}> = [
-  { key: "nationalPension", label: "국민연금 예상액", help: "매월 받을 예상 금액" },
-  { key: "retirementPension", label: "퇴직연금 예상액", help: "IRP 포함, 매월 예상 금액" },
-  { key: "privatePension", label: "개인연금 예상액", help: "연금저축 등 매월 예상 금액" },
-  { key: "targetMonthlyCost", label: "희망 노후 생활비", help: "노후에 매월 필요한 목표 금액" },
-];
-
 function App() {
   const [screen, setScreen] = useState<Screen>("onboarding");
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
   const [mydata, setMydata] = useState<MyDataPayload | undefined>();
   const [aiResult, setAiResult] = useState<AnalyzeResponse | null>(null);
-  const [connectionState, setConnectionState] = useState<"idle" | "loading" | "connected">("idle");
-  const [analysisNote, setAnalysisNote] = useState("");
   const result = useMemo(() => diagnose(input), [input]);
 
   const progress = useMemo(() => {
-    const order: Screen[] = ["consent", "questions", "analyzing", "dashboard", "report", "actions"];
+    const order: Screen[] = ["consent", "snapshot", "questions", "analyzing", "dashboard", "report", "actions"];
     return Math.max(0, order.indexOf(screen) + 1);
   }, [screen]);
 
   async function connectDemoData() {
-    setConnectionState("loading");
     try {
       const payload = await fetchPersona("PA-0001");
       setMydata(payload);
       setInput(pensionInputFromMyData(payload));
     } catch {
       setMydata(undefined);
-    } finally {
-      setConnectionState("connected");
     }
+  }
+
+  async function completeConsent() {
+    await connectDemoData();
+    setScreen("snapshot");
   }
 
   async function analyzePension() {
     setScreen("analyzing");
-    setAnalysisNote("");
     try {
       const data = await fetchAiDiagnosis(
         input,
@@ -93,18 +83,28 @@ function App() {
       );
       setAiResult(data);
     } catch {
-      setAnalysisNote("백엔드 연결 전이라 로컬 계산 결과로 먼저 보여드려요.");
+      setAiResult(null);
     }
   }
 
-  useEffect(() => {
-    if (screen !== "analyzing") return;
-    const timer = window.setTimeout(() => setScreen("dashboard"), 2600);
-    return () => window.clearTimeout(timer);
-  }, [screen]);
-
   if (screen === "onboarding") {
-    return <Onboarding onStart={() => setScreen("consent")} />;
+    return <Onboarding onNext={() => setScreen("consent")} />;
+  }
+
+  if (screen === "consent") {
+    return <DataConsent onNext={completeConsent} />;
+  }
+
+  if (screen === "snapshot") {
+    return <Snapshot onNext={() => setScreen("questions")} />;
+  }
+
+  if (screen === "questions") {
+    return <Questions onNext={analyzePension} />;
+  }
+
+  if (screen === "dashboard") {
+    return <Dashboard onNext={() => setScreen("report")} />;
   }
 
   return (
@@ -123,35 +123,10 @@ function App() {
       </header>
 
       <div className="progress-track" aria-label="진행률">
-        <div className="progress-value" style={{ width: `${(progress / 6) * 100}%` }} />
+        <div className="progress-value" style={{ width: `${(progress / 7) * 100}%` }} />
       </div>
 
-      {screen === "consent" && (
-        <ConsentScreen
-          state={connectionState}
-          onConnect={connectDemoData}
-          onNext={() => setScreen("questions")}
-        />
-      )}
-      {screen === "questions" && (
-        <QuestionsScreen
-          input={input}
-          onChange={setInput}
-          onBack={() => setScreen("consent")}
-          onAnalyze={analyzePension}
-        />
-      )}
-      {screen === "analyzing" && <AnalyzingScreen />}
-      {screen === "dashboard" && (
-        <DashboardScreen
-          input={input}
-          result={result}
-          aiResult={aiResult}
-          note={analysisNote}
-          onReport={() => setScreen("report")}
-          onRestart={() => setScreen("questions")}
-        />
-      )}
+      {screen === "analyzing" && <Analyzing onNext={() => setScreen("dashboard")} />}
       {screen === "report" && (
         <ReportScreen
           input={input}
@@ -170,193 +145,6 @@ function App() {
         />
       )}
     </div>
-  );
-}
-
-function Onboarding({ onStart }: { onStart: () => void }) {
-  return (
-    <main className="onboarding">
-      <div className="onboarding-glow glow-one" />
-      <div className="onboarding-glow glow-two" />
-      <nav className="landing-nav">
-        <div className="brand light"><span className="brand-mark">든</span><span>든든내일</span></div>
-        <span className="secure-label">안전한 연금 진단</span>
-      </nav>
-      <section className="hero">
-        <span className="eyebrow light-eyebrow">AI 연금 건강검진</span>
-        <h1>내 연금,<br /><strong>내일까지 든든하게.</strong></h1>
-        <p>
-          흩어진 연금 정보를 한눈에 모으고,<br />
-          나에게 필요한 다음 행동을 쉽게 알려드려요.
-        </p>
-        <button className="primary-button hero-button" onClick={onStart}>
-          무료로 진단 시작하기 <span>→</span>
-        </button>
-        <small>회원가입 없이 약 3분이면 충분해요</small>
-      </section>
-      <section className="trust-row">
-        <div><b>1분</b><span>정보 연결</span></div>
-        <div><b>맞춤형</b><span>AI 분석</span></div>
-        <div><b>무료</b><span>실행 계획</span></div>
-      </section>
-    </main>
-  );
-}
-
-function ConsentScreen({
-  state,
-  onConnect,
-  onNext,
-}: {
-  state: "idle" | "loading" | "connected";
-  onConnect: () => void;
-  onNext: () => void;
-}) {
-  const connected = state === "connected";
-  return (
-    <main className="page narrow">
-      <span className="eyebrow">STEP 1</span>
-      <h1>흩어진 연금 정보를<br />한 번에 불러올게요</h1>
-      <p className="lead">정확한 진단을 위해 마이데이터를 연결해 주세요. 데모에서는 준비된 샘플 데이터를 사용합니다.</p>
-
-      <div className={`connection-card ${connected ? "connected" : ""}`}>
-        <div className="connection-icon">{connected ? "✓" : "···"}</div>
-        <div>
-          <strong>{connected ? "연금 정보 연결 완료" : "마이데이터 연금 정보"}</strong>
-          <p>{connected ? "국민연금, 퇴직연금, 개인연금을 불러왔어요." : "연금과 자산 정보를 안전하게 확인합니다."}</p>
-        </div>
-      </div>
-
-      <div className="info-list">
-        <div><span>✓</span><p><strong>조회만 진행해요</strong><small>어떤 상품도 임의로 변경하지 않아요.</small></p></div>
-        <div><span>✓</span><p><strong>분석 후 바로 삭제 가능</strong><small>동의한 정보만 진단에 사용해요.</small></p></div>
-        <div><span>✓</span><p><strong>암호화된 안전한 연결</strong><small>민감한 원본 정보는 화면에 노출하지 않아요.</small></p></div>
-      </div>
-
-      {!connected ? (
-        <button className="primary-button full" onClick={onConnect} disabled={state === "loading"}>
-          {state === "loading" ? "연결하고 있어요..." : "동의하고 정보 연결하기"}
-        </button>
-      ) : (
-        <button className="primary-button full" onClick={onNext}>간단 질문으로 계속하기 →</button>
-      )}
-    </main>
-  );
-}
-
-function QuestionsScreen({
-  input,
-  onChange,
-  onBack,
-  onAnalyze,
-}: {
-  input: PensionInput;
-  onChange: (input: PensionInput) => void;
-  onBack: () => void;
-  onAnalyze: () => void;
-}) {
-  return (
-    <main className="page narrow">
-      <span className="eyebrow">STEP 2</span>
-      <h1>원하는 노후 모습을<br />조금만 알려주세요</h1>
-      <p className="lead">입력한 금액은 언제든 다시 바꿀 수 있어요.</p>
-      <div className="question-list">
-        {moneyFields.map((field) => (
-          <label className="money-field" key={field.key}>
-            <span><strong>{field.label}</strong><small>{field.help}</small></span>
-            <span className="money-input">
-              <input
-                type="number"
-                min="0"
-                step="100000"
-                value={input[field.key]}
-                onChange={(event) =>
-                  onChange({ ...input, [field.key]: Math.max(0, Number(event.target.value)) })
-                }
-              />
-              <b>원</b>
-            </span>
-          </label>
-        ))}
-      </div>
-      <div className="button-row">
-        <button className="secondary-button" onClick={onBack}>이전</button>
-        <button className="primary-button" onClick={onAnalyze}>AI 진단 받기 →</button>
-      </div>
-    </main>
-  );
-}
-
-function AnalyzingScreen() {
-  const [message, setMessage] = useState(0);
-  useEffect(() => {
-    const timer = window.setInterval(() => setMessage((value) => (value + 1) % ANALYSIS_MESSAGES.length), 800);
-    return () => window.clearInterval(timer);
-  }, []);
-  return (
-    <main className="analysis-page">
-      <div className="analysis-orbit"><span /><span /><span /><b>AI</b></div>
-      <span className="eyebrow">STEP 3</span>
-      <h1>든든한 내일을<br />분석하고 있어요</h1>
-      <p>{ANALYSIS_MESSAGES[message]}</p>
-      <div className="analysis-lines"><i /><i /><i /></div>
-    </main>
-  );
-}
-
-function DashboardScreen({
-  input,
-  result,
-  aiResult,
-  note,
-  onReport,
-  onRestart,
-}: {
-  input: PensionInput;
-  result: ReturnType<typeof diagnose>;
-  aiResult: AnalyzeResponse | null;
-  note: string;
-  onReport: () => void;
-  onRestart: () => void;
-}) {
-  const achievement = Math.min(100, Math.round((result.totalMonthlyPension / input.targetMonthlyCost) * 100));
-  const score = aiResult ? Math.max(20, 100 - aiResult.uvs) : Math.max(20, achievement);
-  return (
-    <main className="page dashboard-page">
-      <div className="dashboard-heading">
-        <div><span className="eyebrow">MY PENSION REPORT</span><h1>지금 연금 상태는<br /><strong>{result.statusLabel}</strong></h1></div>
-        <div className="score-ring" style={{ "--score": `${score * 3.6}deg` } as React.CSSProperties}>
-          <div><b>{score}</b><span>든든 점수</span></div>
-        </div>
-      </div>
-      {note && <div className="notice">{note}</div>}
-      <section className="summary-grid">
-        <article className="summary-card dark-card">
-          <span>매월 예상 연금</span>
-          <b>{formatKRW(result.totalMonthlyPension)}</b>
-          <small>목표의 {achievement}%를 준비했어요</small>
-          <div className="bar"><i style={{ width: `${achievement}%` }} /></div>
-        </article>
-        <article className="summary-card">
-          <span>매월 부족 예상액</span>
-          <b className="negative">{formatKRW(result.shortageAmount)}</b>
-          <small>지금부터 준비하면 충분히 줄일 수 있어요</small>
-        </article>
-        <article className="summary-card">
-          <span>순금융자산</span>
-          <b>{formatKRW(result.netFinancialAssets)}</b>
-          <small>예금에서 대출 잔액을 제외했어요</small>
-        </article>
-      </section>
-      <section className="insight-card">
-        <div className="insight-number">01</div>
-        <div><span>AI 핵심 진단</span><h2>{aiResult?.final_response || result.statusMessage}</h2></div>
-      </section>
-      <div className="button-row dashboard-actions">
-        <button className="secondary-button" onClick={onRestart}>금액 수정</button>
-        <button className="primary-button" onClick={onReport}>상세 리포트 보기 →</button>
-      </div>
-    </main>
   );
 }
 
