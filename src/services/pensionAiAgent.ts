@@ -96,6 +96,77 @@ export interface AnalyzeResponse {
   scenario_comparison?: ScenarioComparison;
 }
 
+export interface ApiRequestBase {
+  customer_id: string;
+  mydata_raw: MyDataPayload;
+}
+
+export interface StatusCheckResponse {
+  customer_id: string;
+  expected_monthly_pension: number;
+  expected_monthly_pension_start_age: number;
+  financial_asset_total: number;
+  loan_balance_total: number;
+  current_monthly_living_expense: number;
+  currency: "KRW";
+}
+
+export interface CustomQuestion {
+  question_id: string;
+  source: string;
+  category: string;
+  text_ko: string;
+  text_en?: string;
+  response_scale: string;
+  options: string[];
+  reverse_coded: boolean;
+  reason: string;
+  vulnerability_to_validate: string;
+}
+
+export interface CustomQuestionsResponse {
+  customer_id: string;
+  selection_mode: string;
+  llm_used: boolean;
+  llm_error: string;
+  question_count: number;
+  questions: CustomQuestion[];
+}
+
+export interface DashboardPoint {
+  age: number;
+  year_month: string;
+  asset_balance: number;
+  asset_balance_manwon: number;
+  is_shortage_point: boolean;
+}
+
+export interface ResultDashboardResponse {
+  customer_id: string;
+  summary_cards: {
+    expected_monthly_pension: number;
+    expected_monthly_pension_start_age: number;
+    monthly_living_expense: number;
+    stable_maintenance_years: number | null;
+    stable_maintenance_from_age: number;
+    stable_maintenance_to_age: number | null;
+    shortage_expected_age: number | null;
+    shortage_expected_month: string | null;
+  };
+  asset_projection: {
+    unit: "KRW";
+    unit_display: string;
+    start_age: number;
+    retirement_age: number;
+    life_expectancy_age: number;
+    points: DashboardPoint[];
+  };
+  simulation_assumptions: Record<string, unknown>;
+  source_features: Record<string, unknown>;
+  source_profile: Record<string, unknown>;
+  birth_month: string;
+}
+
 export interface PersonaSummary {
   id: string;
   name: string;
@@ -120,6 +191,36 @@ export async function fetchPersona(id: string): Promise<MyDataPayload> {
   const r = await fetch(`${API_URL}/personas/${id}`);
   if (!r.ok) throw new Error(`persona ${id} not found`);
   return r.json();
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${path} ${r.status}: ${text.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+export async function fetchStatusCheck(payload: ApiRequestBase): Promise<StatusCheckResponse> {
+  return postJson<StatusCheckResponse>("/status-check", payload);
+}
+
+export async function fetchCustomQuestions(payload: ApiRequestBase): Promise<CustomQuestionsResponse> {
+  return postJson<CustomQuestionsResponse>("/custom-questions", payload);
+}
+
+export async function fetchResultDashboard(
+  payload: ApiRequestBase & {
+    retirement_age?: number;
+    target_monthly_expense?: number;
+  },
+): Promise<ResultDashboardResponse> {
+  return postJson<ResultDashboardResponse>("/result-dashboard", payload);
 }
 
 /** Pull the simple PensionInput shape out of a full MyData payload — used to

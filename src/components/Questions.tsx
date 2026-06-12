@@ -1,36 +1,78 @@
 import { useState } from 'react';
+import type { CustomQuestion } from '../services/pensionAiAgent';
 
 interface Props {
   onNext: () => void;
+  questions?: CustomQuestion[] | null;
 }
 
-const questions = [
+const fallbackQuestions = [
   {
-    step: 1,
+    question_id: 'fallback-1',
     text: '은퇴 후 생활하고 싶으신 지역은 어디인가요?',
     options: ['수도권', '지방 도시', '귀농·귀촌', '아직 모르겠어요'],
   },
   {
-    step: 2,
+    question_id: 'fallback-2',
     text: '자녀에게 금전적 지원을 계획하고 계신가요?',
     options: ['없음', '가끔 (경조사 등)', '정기적 지원', '교육비 지원 중'],
   },
   {
-    step: 3,
+    question_id: 'fallback-3',
     text: '건강 관련 큰 지출이 예상되시나요?',
     options: ['없음', '약간 예상됨', '상당히 예상됨', '이미 의료비 지출 중'],
   },
 ];
 
-export function Questions({ onNext }: Props) {
+interface UiQuestion {
+  id: string;
+  text: string;
+  options: string[];
+}
+
+const optionLabels: Record<string, string> = {
+  Completely: '매우 그렇다',
+  'Very well': '그렇다',
+  Somewhat: '보통이다',
+  'Very little': '별로 그렇지 않다',
+  'Not at all': '전혀 그렇지 않다',
+  Always: '항상 그렇다',
+  Often: '자주 그렇다',
+  Sometimes: '가끔 그렇다',
+  Rarely: '거의 그렇지 않다',
+  Never: '전혀 없다',
+};
+
+function localizeOptions(options: string[]) {
+  return options.map((option) => optionLabels[option] ?? option);
+}
+
+function normalizeQuestions(questions?: CustomQuestion[] | null) {
+  if (questions?.length) {
+    return questions.slice(0, 3).map<UiQuestion>((question) => ({
+      id: question.question_id,
+      text: question.text_ko,
+      options: question.options?.length ? localizeOptions(question.options) : ['예', '아니오', '잘 모르겠어요'],
+    }));
+  }
+
+  return fallbackQuestions.map<UiQuestion>((question) => ({
+    id: question.question_id,
+    text: question.text,
+    options: question.options,
+  }));
+}
+
+export function Questions({ onNext, questions }: Props) {
   const [step, setStep] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
 
-  const q = questions[step];
+  const activeQuestions = normalizeQuestions(questions);
+  const q = activeQuestions[Math.min(step, activeQuestions.length - 1)];
 
   const handleNext = () => {
     if (!selected) return;
-    if (step < questions.length - 1) {
+    if (step < activeQuestions.length - 1) {
       setStep(step + 1);
       setSelected(null);
     } else {
@@ -56,7 +98,7 @@ export function Questions({ onNext }: Props) {
             className="rounded-full px-3 py-1"
             style={{ background: '#EBF2FC', color: '#2A7BD6', fontSize: '13px', fontWeight: 600 }}
           >
-            질문 {step + 1} / {questions.length}
+            질문 {step + 1} / {activeQuestions.length}
           </span>
         </div>
         <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '8px' }}>
@@ -117,7 +159,7 @@ export function Questions({ onNext }: Props) {
             fontWeight: 700,
           }}
         >
-          {step < questions.length - 1 ? '다음 질문' : '분석 시작하기'}
+          {step < activeQuestions.length - 1 ? '다음 질문' : '분석 시작하기'}
         </button>
       </div>
     </div>
