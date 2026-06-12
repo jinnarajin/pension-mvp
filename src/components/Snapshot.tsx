@@ -1,12 +1,40 @@
+import type { StatusCheckResponse } from '../services/pensionAiAgent';
+
 interface Props {
   onNext: () => void;
+  status?: StatusCheckResponse | null;
 }
 
-const data = [
+function formatManwon(value: number) {
+  const manwon = Math.round(value / 10_000);
+  if (manwon >= 10_000) {
+    const eok = Math.floor(manwon / 10_000);
+    const rest = manwon % 10_000;
+    return rest > 0 ? `${eok}억 ${rest.toLocaleString('ko-KR')}만원` : `${eok}억원`;
+  }
+  return `${manwon.toLocaleString('ko-KR')}만원`;
+}
+
+function formatMonthly(value: number) {
+  return `월 ${formatManwon(value)}`;
+}
+
+const fallbackStatus: StatusCheckResponse = {
+  customer_id: 'fallback',
+  expected_monthly_pension: 870_000,
+  expected_monthly_pension_start_age: 65,
+  financial_asset_total: 234_000_000,
+  loan_balance_total: 0,
+  current_monthly_living_expense: 2_300_000,
+  currency: 'KRW',
+};
+
+function buildData(status: StatusCheckResponse) {
+  return [
   {
     label: '국민연금 예상 수령액',
-    value: '월 87만원',
-    note: '65세 수령 기준',
+    value: formatMonthly(status.expected_monthly_pension),
+    note: `${status.expected_monthly_pension_start_age}세 수령 기준`,
     color: '#2A7BD6',
     icon: (
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
@@ -17,7 +45,7 @@ const data = [
   },
   {
     label: '금융 자산 총액',
-    value: '2억 3,400만원',
+    value: formatManwon(status.financial_asset_total),
     note: '예금·적금·펀드 합산',
     color: '#0D2B6B',
     icon: (
@@ -28,7 +56,7 @@ const data = [
   },
   {
     label: '예상 월 생활비',
-    value: '월 230만원',
+    value: formatMonthly(status.current_monthly_living_expense),
     note: '현재 지출 기준 추정',
     color: '#6B7280',
     icon: (
@@ -38,9 +66,14 @@ const data = [
       </svg>
     ),
   },
-];
+  ];
+}
 
-export function Snapshot({ onNext }: Props) {
+export function Snapshot({ onNext, status }: Props) {
+  const snapshot = status ?? fallbackStatus;
+  const data = buildData(snapshot);
+  const gap = Math.max(0, snapshot.current_monthly_living_expense - snapshot.expected_monthly_pension);
+
   return (
     <div className="h-full flex flex-col bg-white overflow-y-auto">
       {/* Top status header */}
@@ -112,10 +145,10 @@ export function Snapshot({ onNext }: Props) {
             </svg>
             <div>
               <p style={{ fontSize: '15px', fontWeight: 600, color: '#0D2B6B' }}>
-                월 143만원 차이가 있어요.
+                월 {formatManwon(gap)} 차이가 있어요.
               </p>
               <p style={{ fontSize: '13px', color: '#4B7CBD', marginTop: '4px', lineHeight: '150%' }}>
-                연금 수령액(87만원)과 생활비(230만원) 사이 차이예요. 추가 분석을 통해 준비 방법을 알아볼게요.
+                연금 수령액({formatManwon(snapshot.expected_monthly_pension)})과 생활비({formatManwon(snapshot.current_monthly_living_expense)}) 사이 차이예요. 추가 분석을 통해 준비 방법을 알아볼게요.
               </p>
             </div>
           </div>

@@ -2,23 +2,70 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ResponsiveContainer,
 } from 'recharts';
+import type { ResultDashboardResponse } from '../services/pensionAiAgent';
 
 interface Props {
   onNext: () => void;
+  dashboard?: ResultDashboardResponse | null;
+  actions?: string[];
 }
 
-const chartData = [
-  { age: 60, value: 23400 },
-  { age: 63, value: 26200 },
-  { age: 65, value: 27500 },
-  { age: 68, value: 24800 },
-  { age: 70, value: 21000 },
-  { age: 73, value: 14500 },
-  { age: 75, value: 9200 },
-  { age: 78, value: 1800 },
-  { age: 80, value: -3500 },
-  { age: 85, value: -12000 },
-];
+const fallbackDashboard: ResultDashboardResponse = {
+  customer_id: 'fallback',
+  summary_cards: {
+    expected_monthly_pension: 870_000,
+    expected_monthly_pension_start_age: 65,
+    monthly_living_expense: 2_300_000,
+    stable_maintenance_years: 18,
+    stable_maintenance_from_age: 60,
+    stable_maintenance_to_age: 78,
+    shortage_expected_age: 78,
+    shortage_expected_month: '2048-01',
+  },
+  asset_projection: {
+    unit: 'KRW',
+    unit_display: '만원',
+    start_age: 57,
+    retirement_age: 60,
+    life_expectancy_age: 85,
+    points: [
+      { age: 60, year_month: '2030-01', asset_balance: 234_000_000, asset_balance_manwon: 23400, is_shortage_point: false },
+      { age: 63, year_month: '2033-01', asset_balance: 262_000_000, asset_balance_manwon: 26200, is_shortage_point: false },
+      { age: 65, year_month: '2035-01', asset_balance: 275_000_000, asset_balance_manwon: 27500, is_shortage_point: false },
+      { age: 68, year_month: '2038-01', asset_balance: 248_000_000, asset_balance_manwon: 24800, is_shortage_point: false },
+      { age: 70, year_month: '2040-01', asset_balance: 210_000_000, asset_balance_manwon: 21000, is_shortage_point: false },
+      { age: 73, year_month: '2043-01', asset_balance: 145_000_000, asset_balance_manwon: 14500, is_shortage_point: false },
+      { age: 75, year_month: '2045-01', asset_balance: 92_000_000, asset_balance_manwon: 9200, is_shortage_point: false },
+      { age: 78, year_month: '2048-01', asset_balance: 18_000_000, asset_balance_manwon: 1800, is_shortage_point: true },
+      { age: 80, year_month: '2050-01', asset_balance: -35_000_000, asset_balance_manwon: -3500, is_shortage_point: false },
+      { age: 85, year_month: '2055-01', asset_balance: -120_000_000, asset_balance_manwon: -12000, is_shortage_point: false },
+    ],
+  },
+  simulation_assumptions: {},
+  source_features: {},
+  source_profile: {},
+  birth_month: '',
+};
+
+function formatManwonFromWon(value: number) {
+  const manwon = Math.round(value / 10_000);
+  return formatManwon(manwon);
+}
+
+function formatManwon(v: number) {
+  const sign = v < 0 ? '-' : '';
+  const abs = Math.abs(v);
+  if (abs >= 10000) {
+    const eok = Math.floor(abs / 10000);
+    const rest = abs % 10000;
+    return rest > 0 ? `${sign}${eok}억 ${rest.toLocaleString('ko-KR')}만원` : `${sign}${eok}억원`;
+  }
+  return `${sign}${abs.toLocaleString('ko-KR')}만원`;
+}
+
+function formatMonthly(value: number) {
+  return `${formatManwonFromWon(value).replace('만원', '')}만원`;
+}
 
 function fmtAmt(v: number) {
   if (v >= 10000) return `${(v / 10000).toFixed(0)}억`;
@@ -29,7 +76,7 @@ function fmtAmt(v: number) {
 
 const CustomDot = (props: any) => {
   const { cx, cy, payload } = props;
-  if (payload.age === 78) {
+  if (payload.isShortagePoint) {
     return (
       <g>
         <circle cx={cx} cy={cy} r={7} fill="#F59E0B" stroke="white" strokeWidth={2}/>
@@ -55,7 +102,29 @@ const CustomTooltip = ({ active, payload }: any) => {
   return null;
 };
 
-export function Dashboard({ onNext }: Props) {
+export function Dashboard({ onNext, dashboard, actions }: Props) {
+  const data = dashboard ?? fallbackDashboard;
+  const cards = data.summary_cards;
+  const shortageAge = cards.shortage_expected_age ?? cards.stable_maintenance_to_age ?? 78;
+  const stableFrom = cards.stable_maintenance_from_age;
+  const stableTo = cards.stable_maintenance_to_age ?? shortageAge;
+  const stableYears = cards.stable_maintenance_years ?? Math.max(0, stableTo - stableFrom);
+  const chartData = data.asset_projection.points.map((point) => ({
+    age: Math.round(point.age),
+    value: point.asset_balance_manwon,
+    isShortagePoint: point.is_shortage_point || Math.round(point.age) === shortageAge,
+  }));
+  const actionItems = actions?.length
+    ? actions.slice(0, 2).map((action, index) => ({
+        label: action,
+        desc: index === 0 ? 'AI 분석 결과 기반 우선 실행 항목이에요.' : '현재 현금흐름을 기준으로 점검이 필요해요.',
+        badge: index === 0 ? '추천' : '확인 필요',
+      }))
+    : [
+        { label: '연금저축·IRP 추가 납입', desc: '월 20만원 추가 시 안정 기간 3년 연장', badge: '추천' },
+        { label: '65세 국민연금 조기 수령 검토', desc: '5년 앞당기면 월 수령액 감소 효과 확인 필요', badge: '확인 필요' },
+      ];
+
   return (
     <div className="h-full overflow-y-auto bg-white">
       {/* Top summary */}
@@ -73,10 +142,10 @@ export function Dashboard({ onNext }: Props) {
         </div>
         <h2 style={{ fontSize: '21px', fontWeight: 700, color: '#FFFFFF', lineHeight: '150%', marginBottom: '4px' }}>
           현재 계획대로라면<br />
-          <span style={{ color: '#37C27B' }}>78세까지 안정적으로</span> 생활할 수 있어요.
+          <span style={{ color: '#37C27B' }}>{stableTo}세까지 안정적으로</span> 생활할 수 있어요.
         </h2>
         <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', marginTop: '6px' }}>
-          조금 더 준비하면 85세까지 늘릴 수 있어요.
+          조금 더 준비하면 {Math.round(data.asset_projection.life_expectancy_age)}세까지 늘릴 수 있어요.
         </p>
       </div>
 
@@ -84,10 +153,10 @@ export function Dashboard({ onNext }: Props) {
         {/* Key metrics */}
         <div className="grid grid-cols-2 gap-3">
           {[
-            { label: '예상 월 연금', value: '87만원', note: '65세 수령 시', color: '#2A7BD6' },
-            { label: '예상 월 생활비', value: '230만원', note: '현재 지출 기준', color: '#1F2937' },
-            { label: '안정 유지 기간', value: '18년', note: '60→78세', color: '#37C27B' },
-            { label: '부족 예상 시점', value: '78세', note: '현재 계획 기준', color: '#D97706' },
+            { label: '예상 월 연금', value: formatMonthly(cards.expected_monthly_pension), note: `${cards.expected_monthly_pension_start_age}세 수령 시`, color: '#2A7BD6' },
+            { label: '예상 월 생활비', value: formatMonthly(cards.monthly_living_expense), note: '현재 지출 기준', color: '#1F2937' },
+            { label: '안정 유지 기간', value: `${stableYears}년`, note: `${stableFrom}→${stableTo}세`, color: '#37C27B' },
+            { label: '부족 예상 시점', value: `${shortageAge}세`, note: '현재 계획 기준', color: '#D97706' },
           ].map((m) => (
             <div
               key={m.label}
@@ -114,7 +183,7 @@ export function Dashboard({ onNext }: Props) {
             </div>
             <div className="flex items-center gap-1">
               <div className="w-2.5 h-2.5 rounded-full" style={{ background: '#F59E0B' }}/>
-              <span style={{ fontSize: '11px', color: '#6B7280' }}>부족 예상 시점 (78세)</span>
+              <span style={{ fontSize: '11px', color: '#6B7280' }}>부족 예상 시점 ({shortageAge}세)</span>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={160}>
@@ -146,7 +215,7 @@ export function Dashboard({ onNext }: Props) {
             </LineChart>
           </ResponsiveContainer>
           <p className="mt-2 text-center" style={{ fontSize: '11px', color: '#D97706' }}>
-            ● 78세 이후 생활비가 자산을 초과할 수 있어요.
+            ● {shortageAge}세 이후 생활비가 자산을 초과할 수 있어요.
           </p>
         </div>
 
@@ -157,7 +226,7 @@ export function Dashboard({ onNext }: Props) {
           </p>
           <div className="space-y-2">
             {[
-              { icon: '①', text: '국민연금 수령 전 기간(60~65세) 소득 공백이 있어요.', weight: 'high' },
+              { icon: '①', text: `공적연금 수령 전 기간(${stableFrom}~${cards.expected_monthly_pension_start_age}세) 소득 공백이 있어요.`, weight: 'high' },
               { icon: '②', text: '현재 생활비 수준을 유지할 경우 자산 소진이 빨라져요.', weight: 'mid' },
               { icon: '③', text: '주택 자산은 유동화 가능성을 반영하지 않았어요.', weight: 'low' },
             ].map((f) => (
@@ -179,10 +248,7 @@ export function Dashboard({ onNext }: Props) {
             지금 할 수 있는 준비
           </p>
           <div className="space-y-2">
-            {[
-              { label: '연금저축·IRP 추가 납입', desc: '월 20만원 추가 시 안정 기간 3년 연장', badge: '추천' },
-              { label: '65세 국민연금 조기 수령 검토', desc: '5년 앞당기면 월 수령액 감소 효과 확인 필요', badge: '확인 필요' },
-            ].map((a) => (
+            {actionItems.map((a) => (
               <div
                 key={a.label}
                 className="flex items-start gap-3 p-4 rounded-xl"

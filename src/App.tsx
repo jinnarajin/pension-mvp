@@ -9,10 +9,16 @@ import { Snapshot } from "./components/Snapshot";
 import type { PensionInput } from "./models/pension";
 import { diagnose, formatKRW, formatPercent } from "./services/pensionCalculator";
 import {
+  fetchCustomQuestions,
   fetchAiDiagnosis,
   fetchPersona,
+  fetchResultDashboard,
+  fetchStatusCheck,
   pensionInputFromMyData,
   type AnalyzeResponse,
+  type CustomQuestion,
+  type ResultDashboardResponse,
+  type StatusCheckResponse,
   type MyDataPayload,
 } from "./services/pensionAiAgent";
 
@@ -51,6 +57,9 @@ function App() {
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
   const [mydata, setMydata] = useState<MyDataPayload | undefined>();
   const [aiResult, setAiResult] = useState<AnalyzeResponse | null>(null);
+  const [statusCheck, setStatusCheck] = useState<StatusCheckResponse | null>(null);
+  const [customQuestions, setCustomQuestions] = useState<CustomQuestion[] | null>(null);
+  const [resultDashboard, setResultDashboard] = useState<ResultDashboardResponse | null>(null);
   const result = useMemo(() => diagnose(input), [input]);
 
   const progress = useMemo(() => {
@@ -58,19 +67,46 @@ function App() {
     return Math.max(0, order.indexOf(screen) + 1);
   }, [screen]);
 
-  async function connectDemoData() {
-    try {
-      const payload = await fetchPersona("PA-0001");
-      setMydata(payload);
-      setInput(pensionInputFromMyData(payload));
-    } catch {
-      setMydata(undefined);
-    }
+  async function loadBackendViewData(payload: MyDataPayload, nextInput: PensionInput) {
+    const request = {
+      customer_id: "FIGMA-MAKE-MVP",
+      mydata_raw: payload,
+    };
+
+    const [status, questions, dashboard] = await Promise.allSettled([
+      fetchStatusCheck(request),
+      fetchCustomQuestions(request),
+      fetchResultDashboard({
+        ...request,
+        retirement_age: 60,
+        target_monthly_expense: nextInput.targetMonthlyCost,
+      }),
+    ]);
+
+    setStatusCheck(status.status === "fulfilled" ? status.value : null);
+    setCustomQuestions(
+      questions.status === "fulfilled"
+        ? questions.value.questions.slice(0, 3)
+        : null,
+    );
+    setResultDashboard(dashboard.status === "fulfilled" ? dashboard.value : null);
   }
 
   async function completeConsent() {
-    await connectDemoData();
-    setScreen("snapshot");
+    try {
+      const payload = await fetchPersona("PA-0001");
+      const nextInput = pensionInputFromMyData(payload);
+      setMydata(payload);
+      setInput(nextInput);
+      setScreen("snapshot");
+      void loadBackendViewData(payload, nextInput);
+    } catch {
+      setMydata(undefined);
+      setStatusCheck(null);
+      setCustomQuestions(null);
+      setResultDashboard(null);
+      setScreen("snapshot");
+    }
   }
 
   async function analyzePension() {
@@ -96,15 +132,21 @@ function App() {
   }
 
   if (screen === "snapshot") {
-    return <Snapshot onNext={() => setScreen("questions")} />;
+    return <Snapshot status={statusCheck} onNext={() => setScreen("questions")} />;
   }
 
   if (screen === "questions") {
-    return <Questions onNext={analyzePension} />;
+    return <Questions questions={customQuestions} onNext={analyzePension} />;
   }
 
   if (screen === "dashboard") {
-    return <Dashboard onNext={() => setScreen("report")} />;
+    return (
+      <Dashboard
+        dashboard={resultDashboard}
+        actions={aiResult?.action_items}
+        onNext={() => setScreen("report")}
+      />
+    );
   }
 
   return (

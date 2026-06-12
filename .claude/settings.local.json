@@ -21,7 +21,8 @@
       "Bash(docker --version)",
       "Bash(docker-compose version *)",
       "Bash(docker start *)",
-      "Bash(curl -s http://localhost:8000/personas)"
+      "Bash(curl -s http://localhost:8000/personas)",
+      "Bash(kill 38431)"
     ]
   }
 }
