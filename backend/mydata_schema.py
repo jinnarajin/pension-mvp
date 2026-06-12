@@ -43,7 +43,8 @@ class Profile:
     spouse_income_flag: str = ""
     housing_ownership_status: str = ""
     service_years_current: int = 0
-    life_expectancy_age: int = 90
+    gender: str = ""              # "남" | "여" — 기대수명 자동 설정에 사용
+    life_expectancy_age: float = 0  # 0이면 gender 기반 자동 설정 (남=80, 여=86.2)
 
 
 # ── 02 monthly_summaries ──────────────────────────────────
@@ -106,6 +107,7 @@ class Pension:
     expected_start: str         # "YYYY-MM" 수령 개시 시점
     current_yield: float = 0.0  # 최근 1년 수익률 (%)
     contribution_total: int = 0
+    monthly_contribution: int = 0  # 현재 월 납입액
     scheme_group: str = ""
     status: str = ""
     note: str = ""
@@ -247,7 +249,7 @@ PERSONA_A_PROFILE = Profile(
     spouse_income_flag="Y",
     housing_ownership_status="자가",
     service_years_current=31,
-    life_expectancy_age=90,
+    gender="남",
 )
 
 PERSONA_A_MONTHLY = [
@@ -370,20 +372,24 @@ PERSONA_A_ACCOUNTS = [
 PERSONA_A_PENSIONS = [
     Pension(pension_type="공무원연금", provider="공무원연금공단", current_value=0,
             expected_monthly=1_850_000, expected_start="2032-04",
-            contribution_total=132_000_000, scheme_group="public_occupational",
+            contribution_total=132_000_000, monthly_contribution=0,
+            scheme_group="public_occupational",
             status="재직 중", note="현 재직 기준 핵심 공적연금"),
     Pension(pension_type="국민연금", provider="국민연금공단", current_value=0,
             expected_monthly=0, expected_start="",
-            contribution_total=3_200_000, scheme_group="public_national",
+            contribution_total=3_200_000, monthly_contribution=0,
+            scheme_group="public_national",
             status="과거 가입 이력", note="과거 민간근무 이력은 연계연금 검증 대상"),
     Pension(pension_type="IRP", provider="전북은행", current_value=25_900_000,
             expected_monthly=220_000, expected_start="2030-01",
-            contribution_total=23_800_000, scheme_group="private_pension",
-            status="운용 중", note="사적연금"),
+            contribution_total=23_800_000, monthly_contribution=0,
+            scheme_group="private_pension",
+            status="운용 중", note="사적연금; 월 납입액은 거래내역 미확인"),
     Pension(pension_type="개인연금저축", provider="전북은행 방카", current_value=20_700_000,
             expected_monthly=180_000, expected_start="2029-04",
-            contribution_total=19_500_000, scheme_group="private_pension",
-            status="납입 중", note="사적연금"),
+            contribution_total=19_500_000, monthly_contribution=0,
+            scheme_group="private_pension",
+            status="납입 중", note="사적연금; 월 납입액은 거래내역 미확인"),
 ]
 
 PERSONA_A_INVESTMENTS = [
@@ -481,11 +487,14 @@ PERSONA_B_ACCOUNTS = [
 
 PERSONA_B_PENSIONS = [
     Pension(pension_type="국민연금", provider="국민연금공단", current_value=         0,
-            expected_monthly=1_500_000, expected_start="2055-01", current_yield=0.0),
+            expected_monthly=1_500_000, expected_start="2055-01", current_yield=0.0,
+            monthly_contribution=279_000),
     Pension(pension_type="IRP",      provider="키움증권",     current_value= 28_000_000,
-            expected_monthly=  220_000, expected_start="2050-01", current_yield=6.8),
+            expected_monthly=  220_000, expected_start="2050-01", current_yield=6.8,
+            monthly_contribution=300_000),
     Pension(pension_type="개인연금", provider="삼성생명",     current_value= 12_000_000,
-            expected_monthly=  150_000, expected_start="2055-01", current_yield=4.2),
+            expected_monthly=  150_000, expected_start="2055-01", current_yield=4.2,
+            monthly_contribution=150_000),
 ]
 
 PERSONA_B_INVESTMENTS = [

@@ -105,10 +105,9 @@ class CashflowCalculation:
     income_gap_years: float     # 소득 공백기 (년)
     dsr_now: float              # DSR 재직 중
     dsr_retire: float           # DSR 은퇴 후
-    portfolio_deviation: float  # 포트폴리오 괴리도
     shortfall_monthly: int      # 월 부족액
     income_gap_months: int = 0  # 소득 공백기 (월)
-    life_expectancy_age: int = 90
+    life_expectancy_age: float = 80.0
     retirement_total_shortfall_estimated: int = 0
     retirement_total_shortfall_after_assets: int = 0
 
