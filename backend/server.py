@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json, asyncio
 
 load_dotenv()
@@ -57,18 +57,32 @@ class CFPBPayload(BaseModel):
     translation_validated: bool = False
 
 
+class AdaptiveAnswer(BaseModel):
+    question_id: str
+    answer: str | list[str]
+
+
 class AnalyzeRequest(BaseModel):
     customer_id: str
     query: str
     mydata_raw: dict                    # 마이데이터 JSON (10개 시트 구조)
     cfpb: CFPBPayload | None = None     # CFPB 약식 5문항 응답 (선택)
     cfpb_input: CFPBPayload | None = None  # 프론트 호환 alias
+    adaptive_answer_history: list[AdaptiveAnswer] = Field(default_factory=list)
+    retirement_age: int | None = None
+    target_monthly_expense: int | None = None
     scenario_options: dict | None = None
 
 
 class MyDataApiRequest(BaseModel):
     customer_id: str
     mydata_raw: dict
+
+
+class CustomQuestionsRequest(MyDataApiRequest):
+    answer_history: list[AdaptiveAnswer] = Field(default_factory=list)
+    retirement_age: int | None = None
+    target_monthly_expense: int | None = None
 
 
 class ResultDashboardRequest(MyDataApiRequest):
@@ -92,6 +106,8 @@ class AnalyzeResponse(BaseModel):
     fwb_confidence:   str = "indicative"
     rationale:        str = ""
     scenario_comparison: dict = {}
+    priority_board:   dict = {}
+    adaptive_questions: list[dict] = []
 
 
 # ── 엔드포인트 ──────────────────────────────────────────
@@ -104,12 +120,19 @@ async def analyze(req: AnalyzeRequest):
     """
     try:
         cfpb_payload = req.cfpb or req.cfpb_input
+        scenario_options = dict(req.scenario_options or {})
+        if req.retirement_age is not None:
+            scenario_options["retirement_age"] = req.retirement_age
+        if req.target_monthly_expense is not None:
+            scenario_options["target_monthly_expense"] = req.target_monthly_expense
+
         result = run_pipeline(
             customer_id=req.customer_id,
             query=req.query,
             mydata_raw=req.mydata_raw,
             cfpb_input=cfpb_payload.model_dump() if cfpb_payload else None,
-            scenario_options=req.scenario_options,
+            adaptive_answer_history=[answer.model_dump() for answer in req.adaptive_answer_history],
+            scenario_options=scenario_options or None,
             redis_url=REDIS_URL,
         )
 
@@ -120,6 +143,7 @@ async def analyze(req: AnalyzeRequest):
         routing   = result.get("routing")
         dashboard = result.get("dashboard")
         scenario  = result.get("scenario_comparison")
+        adaptive  = result.get("adaptive_questionnaire")
         review    = result.get("review_case")
 
         return AnalyzeResponse(
@@ -141,6 +165,8 @@ async def analyze(req: AnalyzeRequest):
             fwb_confidence=persona.fwb_confidence if persona else "indicative",
             rationale=persona.rationale if persona else "",
             scenario_comparison=dataclasses.asdict(scenario) if scenario else {},
+            priority_board=adaptive.priority_board if adaptive else {},
+            adaptive_questions=adaptive.questions if adaptive else [],
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -164,12 +190,18 @@ async def status_check(req: MyDataApiRequest):
 
 
 @app.post("/custom-questions")
-async def custom_questions(req: MyDataApiRequest):
+async def custom_questions(req: CustomQuestionsRequest):
     """맞춤 질문: 현재 스냅샷 기반으로 question pool에서 정확히 5개 선택."""
     try:
         return {
             "customer_id": req.customer_id,
-            **select_custom_questions(req.mydata_raw, limit=5),
+            **select_custom_questions(
+                req.mydata_raw,
+                limit=5,
+                answer_history=[answer.model_dump() for answer in req.answer_history],
+                retirement_age=req.retirement_age,
+                target_monthly_expense=req.target_monthly_expense,
+            ),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -14,11 +14,12 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from state import (
     AgentState, FeatureChangeResult, DataMappingResult, CashflowSnapshot,
-    RoutingResult, PersonaClassification, CashflowCalculation,
+    RoutingResult, AdaptiveQuestionnaireResult, PersonaClassification, CashflowCalculation,
     DashboardCard, ScenarioComparison, GuardRailResult, ReviewCase
 )
 from mydata_schema import MyDataInput
 from calculations import calculate_all_metrics
+from adaptive_questionnaire_agent import build_adaptive_questionnaire_state
 from scenario_tools import build_pension_receipt_scenarios
 from cfpb_fwb_scorer import (
     score_cfpb_fwb_abbreviated,
@@ -181,9 +182,14 @@ def cashflow_snapshot(state: AgentState) -> AgentState:
     계산 엔진(calculations.py)에서 월 소득·지출, 자산, 부채, 연금 피처를 추출합니다.
     """
     mydata = state["data_mapping"].mydata
+    options = state.get("scenario_options")
 
     # 계산 엔진 호출
-    features = calculate_all_metrics(mydata)
+    features = calculate_all_metrics(
+        mydata,
+        retirement_age=options.retirement_age if options else None,
+        target_monthly_expense=options.target_monthly_expense if options else None,
+    )
 
     result = CashflowSnapshot(
         monthly_income=features["monthly_income_total"],
@@ -234,50 +240,63 @@ def supervisor_agent_check(state: AgentState) -> AgentState:
 
 
 # ══════════════════════════════════════════════════════════
+# [3] Adaptive Questionnaires Agent
+# ══════════════════════════════════════════════════════════
+
+def adaptive_questionnaire_agent(state: AgentState) -> AgentState:
+    """
+    Cashflow 기반 부족 영역을 진단하고, 승인된 질문 Bank에서 다음 질문 후보와
+    dashboard priority board를 산출합니다. CFPB 점수는 사용하지 않습니다.
+    """
+    if state.get("mydata_raw") is None:
+        return {**state, "error": "[3] Adaptive Questionnaire 입력 누락"}
+
+    options = state.get("scenario_options")
+    payload = build_adaptive_questionnaire_state(
+        mydata_raw=state["mydata_raw"],
+        answer_history=state.get("adaptive_answer_history", []),
+        limit=5,
+        retirement_age=options.retirement_age if options else None,
+        target_monthly_expense=options.target_monthly_expense if options else None,
+    )
+    result = AdaptiveQuestionnaireResult(
+        selection_mode=payload["selection_mode"],
+        question_count=payload["question_count"],
+        questions=payload["questions"],
+        domain_gaps=payload["domain_gaps"],
+        answer_insights=payload["answer_insights"],
+        priority_board=payload["priority_board"],
+        persona_context=payload.get("persona_context", {}),
+        llm_used=payload.get("llm_used", False),
+        llm_error=payload.get("llm_error", ""),
+    )
+    primary = result.priority_board.get("primary_label", "")
+    print(f"[3] Adaptive Questionnaire — primary: {primary} | questions={result.question_count}")
+    return {**state, "adaptive_questionnaire": result}
+
+
+# ══════════════════════════════════════════════════════════
 # [3] CFPB Administrator — 5문항 응답을 결정론적으로 채점
 # (기존 Question Routing Agent 대체. 함수 이름은 graph.py 호환을 위해 유지.)
 # ══════════════════════════════════════════════════════════
 
 def question_routing_agent(state: AgentState) -> AgentState:
     """
-    프론트에서 받은 CFPB 약식 5문항 응답을 cfpb_fwb_scorer로 채점합니다.
-    LLM 호출 없음 — 점수는 IRT 룩업표에서 결정론적으로 나옵니다.
+    Legacy compatibility node.
 
-    cfpb_input이 비어있으면 (오프라인/스킵 시나리오) fwb_score=50 인 기본값을
-    설정해 후속 분석은 진행됨. 호출자가 명시적으로 CFPB를 제공한 경우에만
-    실제 점수가 들어갑니다.
+    CFPB fwb_score는 이 제품 흐름에서 더 이상 핵심 의미를 갖지 않습니다.
+    후속 호환 필드를 위해 중립값만 제공하고, 실제 질문/대시보드 우선순위는
+    adaptive_questionnaire_agent 결과를 사용합니다.
     """
-    cfpb = state.get("cfpb_input")
-
-    if cfpb is None:
-        # 기본 중간값 — 마이데이터 객관 지표만으로 분석 계속
-        result = RoutingResult(
-            fwb_score=50, raw_total=10, group="unknown_self",
-            using_official_lookup=USING_OFFICIAL_LOOKUP,
-            translation_validated=False,
-            intent="cfpb_skipped",
-        )
-        print("[3] CFPB skipped — 기본 fwb_score=50 사용")
-        return {**state, "routing": result}
-
-    try:
-        scored = score_cfpb_fwb_abbreviated(
-            answers=cfpb.answers,
-            age=cfpb.age,
-            mode=cfpb.mode,
-        )
-    except (ValueError, RuntimeError) as e:
-        return {**state, "error": f"[3] CFPB 채점 오류: {e}"}
-
     result = RoutingResult(
-        fwb_score=scored["fwb_score"],
-        raw_total=scored["raw_total"],
-        group=scored["group"],
-        using_official_lookup=scored["using_official_lookup"],
-        translation_validated=cfpb.translation_validated,
-        intent="cfpb_fwb",
+        fwb_score=50,
+        raw_total=0,
+        group="not_used",
+        using_official_lookup=False,
+        translation_validated=False,
+        intent="adaptive_questionnaire_primary",
     )
-    print(f"[3] CFPB 채점 — fwb_score: {result.fwb_score} (raw={result.raw_total}, group={result.group})")
+    print("[3] CFPB score not used — Adaptive Questionnaire가 우선")
     return {**state, "routing": result}
 
 
@@ -338,6 +357,7 @@ def persona_classifier(state: AgentState) -> AgentState:
     routing = state.get("routing")
     snapshot = state.get("cashflow_snapshot")
     data_mapping = state.get("data_mapping")
+    adaptive = state.get("adaptive_questionnaire")
     if routing is None or snapshot is None or data_mapping is None:
         return {**state, "error": "[4] Vulnerability Analyzer 입력 누락"}
 
@@ -346,10 +366,27 @@ def persona_classifier(state: AgentState) -> AgentState:
     fwb_score = routing.fwb_score
 
     # ── 1. 주관 취약 S_sub ──────────────────────────────
-    s_sub = (100 - fwb_score) / 100
+    # CFPB score는 더 이상 핵심 지표가 아니므로 중립값으로 둔다.
+    s_sub = 0.5
 
     # ── 2. 객관 취약 S_obj ──────────────────────────────
     s_obj, obj_comp = _normalize_obj(features, profile.age)
+    if adaptive and adaptive.domain_gaps:
+        top_scores = [float(gap.get("score", 0)) for gap in adaptive.domain_gaps[:3]]
+        adaptive_obj = sum(top_scores) / len(top_scores)
+        s_obj = max(s_obj, adaptive_obj)
+        obj_comp = {
+            **obj_comp,
+            "adaptive_top_domains": [
+                {
+                    "domain": gap.get("domain"),
+                    "label": gap.get("label"),
+                    "score": gap.get("score"),
+                    "severity": gap.get("severity"),
+                }
+                for gap in adaptive.domain_gaps[:3]
+            ],
+        }
 
     # ── 3. 결합 + 비선형 증폭 ────────────────────────────
     base = W_SUB_OBJ_ALPHA * s_sub + W_SUB_OBJ_BETA * s_obj
@@ -368,10 +405,14 @@ def persona_classifier(state: AgentState) -> AgentState:
         tier, action = "위기", "fds_block + senior_specialist_call"
 
     needs_review = tier in ("경고", "위기")
-    fwb_confidence = "validated" if routing.translation_validated and routing.using_official_lookup else "indicative"
+    fwb_confidence = "indicative"
 
     # ── 5. 페르소나 라벨 (간단 규칙 기반) ──────────────
-    if profile.age >= 65 and s_sub > 0.6:
+    primary_board = adaptive.priority_board if adaptive else {}
+    primary_label = primary_board.get("primary_label", "")
+    if primary_label:
+        label = f"{primary_label} 우선 관리"
+    elif profile.age >= 65 and s_sub > 0.6:
         label = "은퇴기 주관 취약 고위험"
     elif features.get("years_until_retirement", profile.years_to_retire) <= 5 and s_obj > 0.5:
         label = "은퇴임박 객관 취약"
@@ -395,13 +436,14 @@ def persona_classifier(state: AgentState) -> AgentState:
         flags.append(f"CFPB 주관 웰빙 취약 (fwb={fwb_score})")
     if features.get("income_gap_years", 0) > 0:
         flags.append(f"소득 공백기 {features.get('income_gap_years', 0)}년")
+    if primary_label:
+        flags.append(f"대시보드 우선 영역: {primary_label}")
 
     rationale = (
-        f"CFPB 주관 fwb_score={fwb_score} (S_sub={s_sub:.2f}), "
-        f"마이데이터 객관 S_obj={s_obj:.2f}. "
+        f"Adaptive Questionnaire 우선 영역={primary_label or '없음'}, "
+        f"마이데이터/질문 기반 S_obj={s_obj:.2f}. "
         f"결합 base={base:.2f}, 다차원 트리거 {k}개({trigger_reasons}) "
-        f"→ UVS={uvs} → tier={tier}. "
-        f"{'한국어 비검증 번역이므로 주관 점수는 참고치.' if fwb_confidence == 'indicative' else ''}"
+        f"→ UVS={uvs} → tier={tier}. CFPB fwb_score는 본 흐름의 핵심 판단에 사용하지 않음."
     )
 
     result = PersonaClassification(
@@ -417,6 +459,7 @@ def persona_classifier(state: AgentState) -> AgentState:
             "base": round(base, 3),
             "amplification": round(amplification, 3),
             "triggers": trigger_reasons,
+            "priority_board": primary_board,
         },
         uvs=uvs,
         tier=tier,
@@ -428,7 +471,7 @@ def persona_classifier(state: AgentState) -> AgentState:
             "resilience_objective": round(s_obj, 2),
             "life_events": "not_measured",
             "health": "not_measured",
-            "capability_digital": "not_measured",
+            "capability_digital": primary_board.get("explanation_profile", {}).get("difficulty", "not_measured"),
         },
         rationale=rationale,
     )
@@ -459,6 +502,11 @@ def final_cashflow_calculation(state: AgentState) -> AgentState:
         life_expectancy_age=features.get("life_expectancy_age", 90),
         retirement_total_shortfall_estimated=features.get("retirement_total_shortfall_estimated", 0),
         retirement_total_shortfall_after_assets=features.get("retirement_total_shortfall_after_assets", 0),
+        immediate_exhausted_month=features.get("immediate_exhausted_month", 999.0),
+        semi_liquid_exhausted_month=features.get("semi_liquid_exhausted_month", 999.0),
+        gap_covered_by_immediate=features.get("gap_covered_by_immediate", True),
+        sequential_total_survival_months=features.get("sequential_total_survival_months", 99.0),
+        retirement_shortfall_sequential=features.get("retirement_shortfall_sequential", 0),
     )
     print(f"[5] Final Calc — 부족액: {result.shortfall_monthly:,}원/월")
     return {**state, "calculation": result}
@@ -513,6 +561,8 @@ def dashboard_agent(state: AgentState) -> AgentState:
     query   = state["query"]
     features = state["cashflow_snapshot"].extracted_features
     scenario = state.get("scenario_comparison")
+    adaptive = state.get("adaptive_questionnaire")
+    priority_board = adaptive.priority_board if adaptive else {}
 
     # 연금 구성 분해
     applied_public_pension_type = features.get("applied_public_pension_type", "국민연금")
@@ -555,6 +605,22 @@ def dashboard_agent(state: AgentState) -> AgentState:
     scenario_summary = _summarize_scenarios(scenario)
     recommended_id = scenario.recommended_scenario_id if scenario else ""
     recommendation_reason = scenario.recommendation_reason if scenario else ""
+    priority_board_summary = json.dumps(priority_board, ensure_ascii=False) if priority_board else "{}"
+    adaptive_persona_context = json.dumps(adaptive.persona_context, ensure_ascii=False) if adaptive else "{}"
+    adaptive_answer_context = json.dumps(adaptive.answer_insights, ensure_ascii=False) if adaptive else "[]"
+    adaptive_question_context = json.dumps(
+        [
+            {
+                "question_id": question.get("question_id"),
+                "domain": question.get("domain"),
+                "target_context": question.get("target_context"),
+                "selection_value": question.get("selection_value"),
+                "dashboard_effect": question.get("dashboard_effect"),
+            }
+            for question in (adaptive.questions if adaptive else [])
+        ],
+        ensure_ascii=False,
+    )
 
     # 액션 아이템 생성
     prompt = f"""
@@ -566,6 +632,9 @@ def dashboard_agent(state: AgentState) -> AgentState:
 2. [시나리오 비교] 섹션을 반드시 작성하고 각 수령방식의 핵심 차이를 비교하세요.
 3. 추천 시나리오와 추천 사유를 명확히 설명하세요.
 4. 숫자는 원인과 연결해서 설명하고, 사용자가 바로 이해할 수 있는 표현을 우선하세요.
+5. [우선 해결 보드]의 primary_domain과 card_order를 반영해 가장 먼저 해결할 일을 앞부분에 설명하세요.
+6. [Adaptive Questionnaire Context]의 답변이 있으면 이를 사용자 페르소나와 설명 전략에 반드시 반영하세요.
+   특히 selection_value.affects를 보고 설명 난이도, 체크리스트 깊이, 공유 요약, guardrail, 카드 우선순위를 조정하세요.
 
 {term_glossary}
 
@@ -575,6 +644,9 @@ def dashboard_agent(state: AgentState) -> AgentState:
 월 부족액: {calc.shortfall_monthly:,}원
 월 총수입: {features.get("monthly_income_total", 0):,}원
 월 총지출: {features.get("monthly_expense_total", 0):,}원
+사용자 입력 기준 은퇴나이: {features.get("retirement_age", 60)}세
+사용자 입력 은퇴 후 목표 생활비: {features.get("target_monthly_expense", 0) or features.get("monthly_expense_total", 0):,}원
+은퇴 후 생활비+잔여대출 기준 지출: {features.get("post_retire_expense_monthly", 0):,}원
 월 순현금흐름: {features.get("net_cashflow_monthly", 0):,}원
 사적연금 잔액: {features.get("private_pension_balance", 0):,}원
 IRP 월 납입액: {features.get("irp_contribution_monthly", 0):,}원
@@ -596,23 +668,51 @@ IRP 월 납입액: {features.get("irp_contribution_monthly", 0):,}원
 연금 수령시기 조정 옵션: {features.get("pension_start_adjustment_options", {})}
 PensionReplacementRate: {features.get("PensionReplacementRate", 0)}%
 소득 공백기: {calc.income_gap_years}년({calc.income_gap_months}개월)
-60세 은퇴 직후 생존여력: {calc.survival_months_at_retirement}개월
-은퇴 후 생존여력: {calc.survival_months_retire}개월
+즉시유동 gap 구간 생존여력: {calc.survival_months_at_retirement}개월 (보수적 — 준유동 미포함)
+즉시유동 gap 소진 후 full 구간 추가 생존: {calc.survival_months_retire}개월
+유동+준유동 순차소진 총 생존: {calc.sequential_total_survival_months}개월
+  └ gap 즉시유동 단독 커버: {"가능" if calc.gap_covered_by_immediate else "불가 — 준유동 투입 필요"}
+  └ 즉시유동 소진 시점: 은퇴 후 {calc.immediate_exhausted_month}개월
+  └ 준유동까지 소진 시점: 은퇴 후 {calc.semi_liquid_exhausted_month}개월
 기대수명 기준 총 은퇴 부족액: {calc.retirement_total_shortfall_estimated:,}원
-가용자산 반영 후 잔여 부족액: {calc.retirement_total_shortfall_after_assets:,}원
+순차소진 후 최종 부족액: {calc.retirement_shortfall_sequential:,}원
 
 [수령방식 시나리오 비교]
 {scenario_summary}
 추천 시나리오: {recommended_id}
 추천 사유: {recommendation_reason}
+
+[우선 해결 보드]
+{priority_board_summary}
+
+[Adaptive Questionnaire Context]
+cashflow/retirement persona context:
+{adaptive_persona_context}
+
+사용자 답변 해석:
+{adaptive_answer_context}
+
+선택 질문의 downstream 영향도:
+{adaptive_question_context}
 """
     draft = _llm_text(prompt, 1500)
 
     action_items = []
     if calc.shortfall_monthly > 0:
         action_items.append(f"월 {calc.shortfall_monthly//10000}만원 추가 납입 필요")
-    if calc.survival_months_retire < 12:
-        action_items.append(f"은퇴 후 생존여력 {calc.survival_months_retire:.1f}개월 — 긴급 대비 필요")
+    if not calc.gap_covered_by_immediate:
+        action_items.append(
+            f"소득공백 {calc.income_gap_months}개월을 즉시유동만으로 커버 불가 — "
+            f"은퇴 후 {calc.immediate_exhausted_month:.0f}개월째 준유동 해지 필요"
+        )
+    if calc.sequential_total_survival_months < 24:
+        action_items.append(
+            f"유동+준유동 순차소진 시 생존여력 {calc.sequential_total_survival_months:.1f}개월 — 긴급 대비 필요"
+        )
+    elif calc.survival_months_retire < 12:
+        action_items.append(
+            f"즉시유동 gap 소진 후 추가 여력 {calc.survival_months_retire:.1f}개월 — 준유동 활용 계획 수립 필요"
+        )
 
     result = DashboardCard(
         pension_breakdown=pension_breakdown,
@@ -627,7 +727,13 @@ PensionReplacementRate: {features.get("PensionReplacementRate", 0)}%
             "PensionReplacementRate": calc.pension_replacement_rate,
             "retirement_total_shortfall_estimated": calc.retirement_total_shortfall_estimated,
             "retirement_total_shortfall_after_assets": calc.retirement_total_shortfall_after_assets,
+            "retirement_shortfall_sequential": calc.retirement_shortfall_sequential,
+            "immediate_exhausted_month": calc.immediate_exhausted_month,
+            "semi_liquid_exhausted_month": calc.semi_liquid_exhausted_month,
+            "gap_covered_by_immediate": calc.gap_covered_by_immediate,
+            "sequential_total_survival_months": calc.sequential_total_survival_months,
             "rag_terms": rag_terms,
+            "priority_board": priority_board,
         }
     )
     print(f"[6] Dashboard — 달성률: {achievement}% | 액션: {len(action_items)}개")
@@ -699,6 +805,8 @@ def update_user_state(state: AgentState) -> AgentState:
         "vulnerability_score": persona.vulnerability_score,
         "shortfall_monthly": calc.shortfall_monthly,
         "survival_months_retire": calc.survival_months_retire,
+        "sequential_total_survival_months": calc.sequential_total_survival_months,
+        "gap_covered_by_immediate": calc.gap_covered_by_immediate,
         "last_analyzed": mydata.profile.customer_id,
     }
     _set_stored_state(state["customer_id"], snapshot)

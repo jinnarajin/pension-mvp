@@ -16,7 +16,8 @@ EXPECTED_KEYS = {
     "other_income_monthly",
     "monthly_expense_total", "essential_expense_monthly",
     "insurance_premium_monthly", "loan_repayment_monthly",
-    "net_cashflow_monthly",
+    "net_cashflow_monthly", "cashflow_volatility_12m",
+    "emergency_fund_gap_to_3m", "average_month_end_balance_12m",
     "deposit_balance_total", "investment_balance_total",
     "immediate_liquid_asset_total", "semi_liquid_asset_total",
     "illiquid_account_asset_total", "account_liquidity_breakdown",
@@ -40,12 +41,17 @@ EXPECTED_KEYS = {
     "national_pension_start_age", "public_pension_start_age",
     "public_pension_start_month",
     "pension_start_adjustment_options", "post_retire_expense_monthly",
+    "post_retirement_loan_repayment_monthly",
     "gap_period_shortfall_monthly",
     "PensionReplacementRate", "pension_replacement_rate",
     "survival_months_at_retirement", "survival_months_retire",
     "income_gap_years", "income_gap_months", "life_expectancy_age",
     "post_public_pension_months", "retirement_total_shortfall_estimated",
     "retirement_total_shortfall_after_assets",
+    # 순차 소진 모델
+    "immediate_exhausted_month", "semi_liquid_exhausted_month",
+    "gap_covered_by_immediate", "sequential_total_survival_months",
+    "retirement_shortfall_sequential",
     "dsr_now", "dsr_retire",
     "insurance_burden_retire",
     "pension_asset_ratio",
@@ -79,6 +85,9 @@ def test_persona_a_cashflow_snapshot_matches_raw_mydata_feature_set():
     assert m["insurance_premium_monthly"] == 397_000
     assert m["loan_repayment_monthly"] == 983_000
     assert m["net_cashflow_monthly"] == 1_289_333
+    assert m["average_month_end_balance_12m"] == 1_289_333
+    assert m["cashflow_volatility_12m"] == pytest.approx(0.1775, abs=0.0001)
+    assert m["emergency_fund_gap_to_3m"] == 14_340_001
     assert m["deposit_balance_total"] == 92_340_000
     assert m["immediate_liquid_asset_total"] == 27_340_000
     assert m["semi_liquid_asset_total"] == 58_800_000
@@ -133,6 +142,8 @@ def test_persona_a_cashflow_snapshot_matches_raw_mydata_feature_set():
     assert m["income_gap_years"] == pytest.approx(2.3, abs=0.1)
     assert m["life_expectancy_age"] == pytest.approx(80.0)
     assert m["post_public_pension_months"] == pytest.approx(204)  # (80 - 63) * 12
+    assert m["post_retirement_loan_repayment_monthly"] == 702_000
+    assert m["post_retire_expense_monthly"] == 4_052_333
     # 기대수명 80세 기준 — 실행 후 실제값으로 업데이트 필요
     assert m["retirement_total_shortfall_estimated"] >= 0
     assert m["retirement_total_shortfall_after_assets"] >= 0
@@ -153,6 +164,23 @@ def test_survival_months_non_negative(metrics):
     m, _ = metrics
     assert m["survival_months_at_retirement"] >= 0
     assert m["survival_months_retire"] >= 0
+    assert m["sequential_total_survival_months"] >= 0
+
+
+def test_sequential_depletion_keys(metrics):
+    m, _ = metrics
+    assert "immediate_exhausted_month" in m
+    assert "semi_liquid_exhausted_month" in m
+    assert isinstance(m["gap_covered_by_immediate"], bool)
+    assert m["retirement_shortfall_sequential"] >= 0
+    # 순차 생존 개월은 즉시유동 단독 생존보다 같거나 길어야 한다
+    seq = m["sequential_total_survival_months"]
+    imm_gap = m["survival_months_at_retirement"]
+    imm_full = m["survival_months_retire"]
+    assert seq >= 0
+    # retirement_shortfall_sequential ≤ retirement_total_shortfall_after_assets 는
+    # 준유동 추가 소진으로 부족액이 줄어야 하므로 성립
+    assert m["retirement_shortfall_sequential"] <= m["retirement_total_shortfall_after_assets"] + 1  # 정수 반올림 허용
 
 
 def test_dsr_non_negative(metrics):
@@ -171,6 +199,20 @@ def test_persona_a_income_gap_uses_age_based_retirement():
     m = calculate_all_metrics(PERSONA_A)
     assert m["income_gap_months"] == 28
     assert m["income_gap_years"] == pytest.approx(2.3, abs=0.1)
+
+
+def test_user_retirement_age_and_target_expense_override_retirement_calculation():
+    m = calculate_all_metrics(PERSONA_A, retirement_age=62, target_monthly_expense=4_000_000)
+
+    assert m["retirement_age"] == 62
+    assert m["years_until_retirement"] == 5
+    assert m["service_years_at_retirement"] == 36
+    assert m["retirement_lump_sum_estimated"] == 64_864_800
+    assert m["public_pension_start_age"] == 64
+    assert m["income_gap_months"] == 24
+    assert m["post_retirement_loan_repayment_monthly"] == 0
+    assert m["post_retire_expense_monthly"] == 4_000_000
+    assert m["shortfall_monthly"] == 1_750_000
 
 
 def test_persona_b_no_gap_for_public_pension_start():

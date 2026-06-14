@@ -30,60 +30,49 @@ def test_custom_questions_selects_five_questions_from_pool_without_llm():
     payload = select_custom_questions(_persona_a_raw(), limit=5, use_llm=False)
     pool_ids = {item.id for item in ADAPTIVE_QUESTION_POOL}
 
-    assert payload["selection_mode"] == "fallback_question_pool_agent"
+    assert payload["selection_mode"] == "adaptive_questionnaire_agent"
     assert payload["llm_used"] is False
     assert payload["question_count"] == 5
     assert len(payload["questions"]) == 5
     assert all(question["question_id"] in pool_ids for question in payload["questions"])
     assert all(question["reason"] for question in payload["questions"])
+    assert all(question["target_context"] for question in payload["questions"])
+    assert {question["domain"] for question in payload["questions"]}.issubset({
+        "product_understanding",
+        "decision_check_behavior",
+        "financial_confidence",
+    })
+    assert payload["priority_board"]["primary_domain"]
+    assert all(question["dashboard_effect"]["priority_cards"] for question in payload["questions"])
 
 
-def test_custom_questions_uses_llm_ids_and_hydrates_from_pool(monkeypatch):
-    def fake_llm(snapshot, question_pool, limit):
-        assert snapshot["profile"]["age"] == 57
-        assert len(question_pool) >= 5
-        return [
+def test_custom_questions_excludes_answered_questions_and_updates_insights():
+    first = select_custom_questions(_persona_a_raw(), limit=5, use_llm=False)
+    answered = first["questions"][0]
+    second = select_custom_questions(
+        _persona_a_raw(),
+        limit=5,
+        use_llm=False,
+        answer_history=[
             {
-                "question_id": "CFPB_06",
-                "reason": "은퇴 후 자산 지속성 우려를 확인합니다.",
-                "vulnerability_to_validate": "retirement_anxiety",
-            },
-            {
-                "question_id": "QF9",
-                "reason": "공적연금과 사적연금 구성을 이해하는지 확인합니다.",
-                "vulnerability_to_validate": "retirement_income_awareness",
-            },
-            {
-                "question_id": "QF2_4",
-                "reason": "대출 상환 관리 역량을 확인합니다.",
-                "vulnerability_to_validate": "bill_management",
-            },
-            {
-                "question_id": "QP9_8",
-                "reason": "마이데이터 활용 경험을 확인합니다.",
-                "vulnerability_to_validate": "mydata_familiarity",
-            },
-            {
-                "question_id": "QF4",
-                "reason": "예상치 못한 지출 대응력을 확인합니다.",
-                "vulnerability_to_validate": "emergency_resilience",
-            },
-        ]
+                "question_id": answered["question_id"],
+                "answer": answered["options"][0],
+            }
+        ],
+    )
 
-    monkeypatch.setattr("api_views._call_question_selection_llm", fake_llm)
-    payload = select_custom_questions(_persona_a_raw(), limit=5)
+    assert answered["question_id"] not in {q["question_id"] for q in second["questions"]}
+    assert second["answer_insights"]
 
-    assert payload["selection_mode"] == "llm_question_pool_agent"
-    assert payload["llm_used"] is True
-    assert [q["question_id"] for q in payload["questions"]] == [
-        "CFPB_06",
-        "QF9",
-        "QF2_4",
-        "QP9_8",
-        "QF4",
-    ]
-    assert payload["questions"][0]["text_ko"]
-    assert payload["questions"][0]["reason"] == "은퇴 후 자산 지속성 우려를 확인합니다."
+
+def test_custom_questions_logs_selection_reasons(capsys):
+    payload = select_custom_questions(_persona_a_raw(), limit=5, use_llm=False)
+    captured = capsys.readouterr()
+
+    assert "[AdaptiveQ]" in captured.out
+    assert payload["questions"][0]["question_id"] in captured.out
+    assert "reason=" in captured.out
+    assert "primary_domain=" in captured.out
 
 
 def test_result_dashboard_returns_projection_points_and_summary_cards():
@@ -98,3 +87,17 @@ def test_result_dashboard_returns_projection_points_and_summary_cards():
     assert points[0]["asset_balance"] > 0
     assert any(point["age"] >= 60 for point in points)
     assert payload["simulation_assumptions"]["loan_payments_applied_until_maturity"] is True
+
+
+def test_result_dashboard_uses_user_retirement_age_and_target_expense():
+    payload = build_asset_projection_dashboard(
+        _persona_a_raw(),
+        retirement_age=62,
+        target_monthly_expense=4_000_000,
+    )
+
+    assert payload["summary_cards"]["monthly_living_expense"] == 4_000_000
+    assert payload["summary_cards"]["stable_maintenance_from_age"] == 62
+    assert payload["asset_projection"]["retirement_age"] == 62
+    assert payload["simulation_assumptions"]["target_monthly_expense"] == 4_000_000
+    assert payload["simulation_assumptions"]["non_loan_living_expense"] == 4_000_000

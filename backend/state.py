@@ -76,6 +76,24 @@ class RoutingResult:
 
 
 @dataclass
+class AdaptiveQuestionnaireResult:
+    """Adaptive Questionnaires Agent 출력.
+
+    CFPB 점수가 아니라 cashflow 기반 부족 영역, 다음 질문, 답변 해석,
+    dashboard 우선순위 보드를 담는다.
+    """
+    selection_mode: str
+    question_count: int
+    questions: list[dict]
+    domain_gaps: list[dict]
+    answer_insights: list[dict]
+    priority_board: dict
+    persona_context: dict = field(default_factory=dict)
+    llm_used: bool = False
+    llm_error: str = ""
+
+
+@dataclass
 class PersonaClassification:
     """[4] Evidence-based Persona Classifier — Vulnerability Analyzer.
 
@@ -100,8 +118,8 @@ class PersonaClassification:
 class CashflowCalculation:
     """[5] Final Cashflow Calculation"""
     pension_replacement_rate: float  # 은퇴 후 연금소득 / 은퇴 전 월소득
-    survival_months_at_retirement: float  # 60세 은퇴 직후 생존 여력
-    survival_months_retire: float  # 은퇴 후 생존 여력
+    survival_months_at_retirement: float  # 즉시유동으로 gap 구간 몇 달 버티는지 (보수적)
+    survival_months_retire: float  # gap 소진 후 즉시유동 잔여분으로 full 구간 몇 달 더 버티는지
     income_gap_years: float     # 소득 공백기 (년)
     dsr_now: float              # DSR 재직 중
     dsr_retire: float           # DSR 은퇴 후
@@ -110,6 +128,12 @@ class CashflowCalculation:
     life_expectancy_age: float = 80.0
     retirement_total_shortfall_estimated: int = 0
     retirement_total_shortfall_after_assets: int = 0
+    # ── 순차 소진 모델 ────────────────────────────────
+    immediate_exhausted_month: float = 999.0        # 즉시유동 소진 시점 (은퇴 후 몇 번째 달)
+    semi_liquid_exhausted_month: float = 999.0      # 준유동까지 소진 시점
+    gap_covered_by_immediate: bool = True           # gap 기간을 즉시유동만으로 커버 가능 여부
+    sequential_total_survival_months: float = 99.0  # 유동→준유동 순차 소진 총 생존 개월
+    retirement_shortfall_sequential: int = 0        # 순차 소진 후 최종 부족액
 
 
 @dataclass
@@ -164,6 +188,7 @@ class AgentState(TypedDict):
     query: str
     mydata_raw: Optional[dict]              # 원본 마이데이터 (JSON)
     cfpb_input: Optional[CFPBInput]         # CFPB 5문항 응답 (프론트에서 받음)
+    adaptive_answer_history: list[dict]
     scenario_options: Optional[ScenarioOptions]
 
     # Orchestration 분기
@@ -173,6 +198,7 @@ class AgentState(TypedDict):
     # [1] ~ [6] Agent 결과
     data_mapping: Optional[DataMappingResult]
     cashflow_snapshot: Optional[CashflowSnapshot]
+    adaptive_questionnaire: Optional[AdaptiveQuestionnaireResult]
     routing: Optional[RoutingResult]
     persona: Optional[PersonaClassification]
     calculation: Optional[CashflowCalculation]

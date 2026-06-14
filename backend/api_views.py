@@ -9,6 +9,7 @@ from math import ceil
 from typing import Any
 
 from adaptive_question_pool import ADAPTIVE_QUESTION_POOL, QuestionPoolItem
+from adaptive_questionnaire_agent import build_adaptive_questionnaire_state
 from calculations import calculate_all_metrics
 from mydata_schema import MyDataInput
 
@@ -98,9 +99,17 @@ def _life_expectancy_age(features: dict[str, Any]) -> float:
     return float(features.get("life_expectancy_age", 90) or 90)
 
 
-def parse_mydata_and_features(mydata_raw: dict) -> tuple[MyDataInput, dict[str, Any]]:
+def parse_mydata_and_features(
+    mydata_raw: dict,
+    retirement_age: int | None = None,
+    target_monthly_expense: int | None = None,
+) -> tuple[MyDataInput, dict[str, Any]]:
     data = MyDataInput.from_dict(mydata_raw)
-    return data, calculate_all_metrics(data)
+    return data, calculate_all_metrics(
+        data,
+        retirement_age=retirement_age,
+        target_monthly_expense=target_monthly_expense,
+    )
 
 
 def build_status_check(mydata_raw: dict) -> dict[str, Any]:
@@ -385,32 +394,76 @@ def select_custom_questions(
     mydata_raw: dict,
     limit: int = 5,
     use_llm: bool = True,
+    answer_history: list[dict[str, Any]] | None = None,
+    retirement_age: int | None = None,
+    target_monthly_expense: int | None = None,
 ) -> dict[str, Any]:
-    """LLM question-selection agent constrained to ADAPTIVE_QUESTION_POOL."""
-    data, features = parse_mydata_and_features(mydata_raw)
-    fallback_selections = _rule_based_question_selection(data, features, limit)
-    snapshot = _snapshot_for_question_agent(data, features)
-    llm_selections: list[dict[str, str]] = []
-    llm_error = ""
-    if use_llm:
-        try:
-            llm_selections = _call_question_selection_llm(
-                snapshot=snapshot,
-                question_pool=_question_pool_for_prompt(),
-                limit=limit,
-            )
-        except Exception as exc:
-            llm_error = str(exc)
+    """Adaptive questionnaire payload constrained to the approved question bank."""
+    _ = use_llm  # Kept for compatibility; this agent is deterministic for now.
+    payload = build_adaptive_questionnaire_state(
+        mydata_raw=mydata_raw,
+        answer_history=answer_history or [],
+        limit=limit,
+        retirement_age=retirement_age,
+        target_monthly_expense=target_monthly_expense,
+    )
+    _log_adaptive_questionnaire_selection(payload)
+    return payload
 
-    questions = _hydrate_question_selections(llm_selections, fallback_selections, limit)
 
-    return {
-        "selection_mode": "llm_question_pool_agent" if use_llm and not llm_error else "fallback_question_pool_agent",
-        "llm_used": use_llm and not llm_error,
-        "llm_error": llm_error,
-        "question_count": len(questions),
-        "questions": questions,
-    }
+def _log_adaptive_questionnaire_selection(payload: dict[str, Any]) -> None:
+    """Emit human-readable selection reasoning to Docker stdout."""
+    board = payload.get("priority_board", {})
+    print(
+        "[AdaptiveQ] "
+        f"selection_mode={payload.get('selection_mode')} "
+        f"primary_domain={board.get('primary_domain')} "
+        f"primary_label={board.get('primary_label')} "
+        f"severity={board.get('severity')} "
+        f"why_now={board.get('why_now')}",
+        flush=True,
+    )
+
+    for index, gap in enumerate(payload.get("domain_gaps", [])[:5], start=1):
+        evidence = " | ".join(str(item) for item in gap.get("evidence", [])[:3])
+        effect = gap.get("dashboard_effect", {})
+        cards = ",".join(effect.get("priority_cards", [])[:4])
+        print(
+            "[AdaptiveQ] "
+            f"gap#{index} domain={gap.get('domain')} "
+            f"label={gap.get('label')} "
+            f"score={gap.get('score')} "
+            f"severity={gap.get('severity')} "
+            f"evidence={evidence} "
+            f"cards={cards}",
+            flush=True,
+        )
+
+    for index, question in enumerate(payload.get("questions", []), start=1):
+        cards = ",".join(question.get("dashboard_effect", {}).get("priority_cards", [])[:4])
+        selection_value = question.get("selection_value", {})
+        print(
+            "[AdaptiveQ] "
+            f"selected#{index} id={question.get('question_id')} "
+            f"domain={question.get('domain')} "
+            f"category={question.get('category')} "
+            f"target_context={question.get('target_context')} "
+            f"selection_value={selection_value.get('score')} "
+            f"target={question.get('vulnerability_to_validate')} "
+            f"reason={question.get('reason')} "
+            f"cards={cards}",
+            flush=True,
+        )
+
+    for insight in payload.get("answer_insights", []):
+        print(
+            "[AdaptiveQ] "
+            f"answer id={insight.get('question_id')} "
+            f"domain={insight.get('domain')} "
+            f"gap_confirmed={insight.get('signals', {}).get('gap_confirmed')} "
+            f"raw_answer={insight.get('raw_answer')}",
+            flush=True,
+        )
 
 
 def build_asset_projection_dashboard(
@@ -419,9 +472,17 @@ def build_asset_projection_dashboard(
     target_monthly_expense: int | None = None,
 ) -> dict[str, Any]:
     """Build result dashboard values and monthly-to-yearly asset projection."""
-    data, features = parse_mydata_and_features(mydata_raw)
+    data, features = parse_mydata_and_features(
+        mydata_raw,
+        retirement_age=retirement_age,
+        target_monthly_expense=target_monthly_expense,
+    )
     retirement_age = int(retirement_age or features.get("retirement_age", RETIREMENT_AGE_DEFAULT))
     status = build_status_check(mydata_raw)
+    expected_monthly_pension = int(
+        features.get("private_pension_monthly", 0)
+        + features.get("public_pension_monthly", 0)
+    )
 
     reference_month = _reference_month(data)
     birth_month = _birth_month(data, reference_month)
@@ -431,10 +492,9 @@ def build_asset_projection_dashboard(
     retirement_month = _add_months(reference_month, retirement_month_offset)
     retirement_lump_sum = int(features.get("retirement_lump_sum_estimated", 0))
     current_assets = _financial_asset_total(features)
-    non_loan_living_expense = max(
-        0,
-        int(target_monthly_expense or features.get("monthly_expense_total", 0))
-        - int(features.get("monthly_repayment_total", 0)),
+    non_loan_living_expense = int(
+        target_monthly_expense
+        or max(0, int(features.get("monthly_expense_total", 0)) - int(features.get("monthly_repayment_total", 0)))
     )
 
     private_pensions = [
@@ -509,9 +569,9 @@ def build_asset_projection_dashboard(
 
     return {
         "summary_cards": {
-            "expected_monthly_pension": status["expected_monthly_pension"],
-            "expected_monthly_pension_start_age": status["expected_monthly_pension_start_age"],
-            "monthly_living_expense": status["current_monthly_living_expense"],
+            "expected_monthly_pension": expected_monthly_pension,
+            "expected_monthly_pension_start_age": int(features.get("public_pension_start_age", 0)),
+            "monthly_living_expense": int(target_monthly_expense or status["current_monthly_living_expense"]),
             "stable_maintenance_years": stable_maintenance_years,
             "stable_maintenance_from_age": retirement_age,
             "stable_maintenance_to_age": int(shortage_age) if shortage_age is not None else None,
@@ -535,6 +595,7 @@ def build_asset_projection_dashboard(
             "salary_income_until_age": retirement_age,
             "retirement_lump_sum_added_at": _format_year_month(retirement_month),
             "loan_payments_applied_until_maturity": True,
+            "target_monthly_expense": int(target_monthly_expense or 0),
             "public_pension_start_month": features.get("public_pension_start_month", ""),
             "private_pensions_use_expected_start": True,
             "non_loan_living_expense": non_loan_living_expense,
@@ -544,6 +605,8 @@ def build_asset_projection_dashboard(
             for key in [
                 "monthly_income_total",
                 "monthly_expense_total",
+                "target_monthly_expense",
+                "post_retire_expense_monthly",
                 "monthly_repayment_total",
                 "private_pension_monthly",
                 "public_pension_monthly",

@@ -33,6 +33,7 @@ from agents import (
     backend_data_mapping,
     cashflow_snapshot,
     supervisor_agent_check,
+    adaptive_questionnaire_agent,
     question_routing_agent,
     persona_classifier,
     final_cashflow_calculation,
@@ -59,7 +60,8 @@ def route_after_guardrail(state: AgentState) -> str:
     high_financial_risk = bool(
         calc and (
             calc.shortfall_monthly > 0
-            or calc.survival_months_retire < 12
+            or calc.sequential_total_survival_months < 24
+            or not calc.gap_covered_by_immediate
             or calc.dsr_retire >= 30
         )
     )
@@ -88,6 +90,7 @@ def build_graph(redis_url: str = DEFAULT_REDIS_URL) -> StateGraph:
     graph.add_node("backend_data_mapping",       backend_data_mapping)
     graph.add_node("cashflow_snapshot",          cashflow_snapshot)
     graph.add_node("supervisor_agent_check",     supervisor_agent_check)
+    graph.add_node("adaptive_questionnaire_agent", adaptive_questionnaire_agent)
     graph.add_node("question_routing_agent",     question_routing_agent)
     graph.add_node("persona_classifier",         persona_classifier)
     graph.add_node("final_cashflow_calculation", final_cashflow_calculation)
@@ -117,7 +120,8 @@ def build_graph(redis_url: str = DEFAULT_REDIS_URL) -> StateGraph:
     # ── 풀 파이프라인 순차 엣지
     graph.add_edge("backend_data_mapping",       "cashflow_snapshot")
     graph.add_edge("cashflow_snapshot",          "supervisor_agent_check")  # Supervisor
-    graph.add_edge("supervisor_agent_check",     "question_routing_agent")
+    graph.add_edge("supervisor_agent_check",     "adaptive_questionnaire_agent")
+    graph.add_edge("adaptive_questionnaire_agent", "question_routing_agent")
     graph.add_edge("question_routing_agent",     "persona_classifier")
     graph.add_edge("persona_classifier",         "final_cashflow_calculation")
     graph.add_edge("final_cashflow_calculation", "pension_receipt_scenario_agent")
@@ -153,6 +157,7 @@ def run_pipeline(
     query: str,
     mydata_raw: dict,
     cfpb_input: dict | None = None,
+    adaptive_answer_history: list[dict] | None = None,
     scenario_options: dict | None = None,
     redis_url: str = DEFAULT_REDIS_URL
 ) -> dict:
@@ -192,11 +197,13 @@ def run_pipeline(
         "query":             query,
         "mydata_raw":        mydata_raw,
         "cfpb_input":        cfpb_obj,
+        "adaptive_answer_history": adaptive_answer_history or [],
         "scenario_options":  scenario_obj,
         "feature_change":    None,
         "needs_reanalysis":  True,
         "data_mapping":      None,
         "cashflow_snapshot": None,
+        "adaptive_questionnaire": None,
         "routing":           None,
         "persona":           None,
         "calculation":       None,

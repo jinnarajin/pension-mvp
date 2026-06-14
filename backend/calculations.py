@@ -83,8 +83,26 @@ def _months_between(start_ym: str, end_ym: str) -> int:
     return max(0, (end_year - start_year) * 12 + (end_month - start_month))
 
 
+def _loan_active_at_or_after_month(maturity_date: str, target_ym: str) -> bool:
+    """대출 만기월이 target_ym 이후이면 해당 시점에도 상환 부담이 남아 있다고 본다."""
+    if not maturity_date or not target_ym:
+        return True
+    return _year_month_from_date(maturity_date) >= target_ym
+
+
 def _avg(items: list[int]) -> int:
     return sum(items) // len(items) if items else 0
+
+
+def _coefficient_of_variation(values: list[int]) -> float:
+    """월별 값의 population CV를 반환한다. 평균이 0이면 변동성을 0으로 둔다."""
+    if not values:
+        return 0.0
+    mean = sum(values) / len(values)
+    if mean == 0:
+        return 0.0
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return round((variance ** 0.5) / abs(mean), 4)
 
 
 def _monthly_average(data: MyDataInput, field_name: str, fallback_field: str | None = None) -> int:
@@ -215,6 +233,121 @@ def _civil_servant_retirement_allowance_rate(service_years: int) -> float:
     return 0
 
 
+def _sequential_depletion(
+    gap_months: int,
+    gap_deficit: float,
+    full_months: float,
+    full_deficit: float,
+    pool_immediate: float,
+    pool_semi: float,
+) -> dict:
+    """
+    유동→준유동 순서로 은퇴 자산을 소진하는 순차 소진 모델.
+
+    Phase 1 (gap 구간): 공적연금 개시 전 — immediate → semi 순으로 소진.
+    Phase 2 (full 구간): 공적연금 개시 후 — phase 1 잔여분부터 이어서 소진.
+    illiquid(청약 등)은 실질 유동화가 어려우므로 소진 모델에서 제외.
+
+    Returns:
+        immediate_exhausted_month        즉시유동이 소진되는 은퇴 후 몇 번째 달 (없으면 999)
+        semi_liquid_exhausted_month      준유동까지 소진되는 은퇴 후 몇 번째 달 (없으면 999)
+        gap_covered_by_immediate         gap 기간을 즉시유동만으로 커버 가능 여부
+        sequential_total_survival_months 유동→준유동 순차 소진 시 총 생존 개월 수
+        retirement_shortfall_sequential  순차 소진 후 남는 최종 부족액 (원)
+    """
+    gap_need  = gap_months  * gap_deficit
+    full_need = full_months * full_deficit
+
+    # ── Phase 1: gap 구간 소진 ──────────────────────────────────
+    imm  = float(pool_immediate)
+    semi = float(pool_semi)
+
+    imm_used_gap  = min(imm,  gap_need)
+    imm  -= imm_used_gap
+    semi_used_gap = min(semi, max(0.0, gap_need - imm_used_gap))
+    semi -= semi_used_gap
+
+    # ── Phase 2: full 구간 소진 ─────────────────────────────────
+    imm_used_full  = min(imm,  full_need)
+    imm  -= imm_used_full
+    semi_used_full = min(semi, max(0.0, full_need - imm_used_full))
+    semi -= semi_used_full
+
+    # ── 즉시유동 소진 시점 ───────────────────────────────────────
+    if gap_deficit > 0 and pool_immediate < gap_need:
+        # gap 구간 중 소진
+        immediate_exhausted_month = round(pool_immediate / gap_deficit, 1)
+    elif imm_used_full > 0 and full_deficit > 0:
+        # gap 구간은 버텼지만 full 구간 중 소진
+        imm_after_gap = pool_immediate - imm_used_gap
+        immediate_exhausted_month = round(gap_months + imm_after_gap / full_deficit, 1)
+    else:
+        immediate_exhausted_month = 999.0  # 소진되지 않음
+
+    # ── gap 구간을 즉시유동만으로 커버 가능 여부 ────────────────
+    gap_covered_by_immediate = (gap_deficit <= 0) or (pool_immediate >= gap_need)
+
+    # ── 준유동 소진 시점 ─────────────────────────────────────────
+    if pool_semi == 0:
+        semi_exhausted_month = 999.0
+    elif semi_used_gap > 0:
+        # gap 구간 중 semi가 투입된 경우
+        semi_start = immediate_exhausted_month  # immediate 소진 직후 semi 투입 시작
+        semi_after_gap = pool_semi - semi_used_gap
+        if semi_after_gap > 0 and full_deficit > 0 and semi_used_full > 0:
+            # full 구간까지 semi 이어서 소진
+            semi_exhausted_month = round(gap_months + semi_after_gap / full_deficit, 1)
+        elif semi_after_gap <= 0:
+            # gap 구간 중 semi 전부 소진
+            if gap_deficit > 0:
+                semi_exhausted_month = round(semi_start + pool_semi / gap_deficit, 1)
+            else:
+                semi_exhausted_month = float(gap_months)
+        else:
+            semi_exhausted_month = 999.0  # semi 잔여분이 full 구간에서도 충분
+    elif semi_used_full > 0:
+        # gap 구간에서는 semi 안 쓰였고, full 구간에서 처음 투입
+        if full_deficit > 0:
+            semi_exhausted_month = round(
+                immediate_exhausted_month + pool_semi / full_deficit, 1
+            )
+        else:
+            semi_exhausted_month = 999.0
+    else:
+        semi_exhausted_month = 999.0  # semi 전혀 사용 안 됨
+
+    # ── 순차 총 생존 개월 수 ─────────────────────────────────────
+    total_pool = pool_immediate + pool_semi
+    total_need = gap_need + full_need
+
+    if total_need <= 0:
+        sequential_total_survival_months = 99.0
+    elif total_pool >= total_need:
+        sequential_total_survival_months = round(gap_months + full_months, 1)
+    elif gap_deficit > 0 and total_pool < gap_need:
+        # gap 구간 중 고갈
+        sequential_total_survival_months = round(total_pool / gap_deficit, 1)
+    else:
+        remaining_after_gap = total_pool - gap_need
+        if full_deficit > 0:
+            sequential_total_survival_months = round(
+                gap_months + remaining_after_gap / full_deficit, 1
+            )
+        else:
+            sequential_total_survival_months = round(gap_months + full_months, 1)
+
+    # ── 최종 순 부족액 ───────────────────────────────────────────
+    retirement_shortfall_sequential = max(0, int(total_need - total_pool))
+
+    return {
+        "immediate_exhausted_month":        immediate_exhausted_month,
+        "semi_liquid_exhausted_month":      semi_exhausted_month,
+        "gap_covered_by_immediate":         gap_covered_by_immediate,
+        "sequential_total_survival_months": sequential_total_survival_months,
+        "retirement_shortfall_sequential":  retirement_shortfall_sequential,
+    }
+
+
 def _account_liquidity_tier(account_type: str) -> str:
     """계좌 유형을 실무상 현금 접근성 기준으로 즉시유동/준유동/비유동 분류한다."""
     if any(keyword in account_type for keyword in ILLIQUID_ACCOUNT_TYPES):
@@ -233,7 +366,11 @@ def _service_years_current(data: MyDataInput) -> int:
     return max(0, data.profile.age - 27)
 
 
-def calculate_all_metrics(data: MyDataInput) -> dict:
+def calculate_all_metrics(
+    data: MyDataInput,
+    retirement_age: int | None = None,
+    target_monthly_expense: int | None = None,
+) -> dict:
     """
     마이데이터 전체에서 8개 재무 지표를 산출합니다.
 
@@ -254,6 +391,7 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
     inv = data.investments
     loans = data.loans
     ins = data.insurances
+    retirement_age = int(retirement_age or RETIREMENT_AGE)
 
     # ── A. 월 소득 구성요소 ─────────────────────────────
     # 급여, 비정기 수입, 현재 연금, 금융소득, 배우자소득, 기타소득을
@@ -279,6 +417,13 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
     # 필수지출, 보험료, 대출상환액을 분리해 향후 부족액·DSR·보험 부담률 계산의
     # 입력값으로 사용한다.
     monthly_expense_total = _monthly_average(data, "total_expense") or db.monthly_expense_avg
+    monthly_cashflows_12m = [summary.cashflow or 0 for summary in data.monthly_summaries]
+    average_month_end_balance_12m = (
+        _avg(monthly_cashflows_12m)
+        if any(monthly_cashflows_12m)
+        else db.monthly_cashflow_avg
+    )
+    cashflow_volatility_12m = _coefficient_of_variation(monthly_cashflows_12m)
     essential_expense_monthly = _monthly_average(data, "essential_expense")
     insurance_premium_monthly = _monthly_average(data, "insurance_premium") or sum(
         item.monthly_premium for item in ins if item.is_protection_insurance == "Y"
@@ -320,6 +465,7 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         + other_asset_estimated
     )
     liquid_asset_total = immediate_liquid_asset_total
+    emergency_fund_gap_to_3m = liquid_asset_total - monthly_expense_total * 3
     loan_balance_total = sum(loan.balance for loan in loans)
     monthly_repayment_total = sum(loan.monthly_payment for loan in loans)
     loan_details = [
@@ -363,7 +509,10 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
     # 기준소득월액 × 재직연수 × 지급비율을 적용한다.
     # DB/DC 퇴직연금 적립금이 별도로 있으면 일반 퇴직금과 중복 계상하지 않는다.
     birth_year = _birth_year(data)
-    years_until_retirement = max(0, RETIREMENT_AGE - p.age)
+    years_until_retirement = max(0, retirement_age - p.age)
+    retirement_month = _year_month_at_age(data, retirement_age)
+    if retirement_age == RETIREMENT_AGE:
+        retirement_month = _year_month_from_date(p.retire_date) or retirement_month
     service_years_current = _service_years_current(data)
     service_years_at_retirement = service_years_current + years_until_retirement
     has_civil_servant_pension = _has_civil_servant_pension(data)
@@ -409,7 +558,7 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
 
     occupational_start_age = None
     public_pension_start_month = ""
-    retire_year = int(p.retire_date[:4]) if p.retire_date else 0
+    retire_year = int(retirement_month[:4]) if retirement_month else 0
     civil_servant_start_age = _civil_servant_pension_start_age_by_retire_year(retire_year)
     if has_civil_servant_pension and civil_servant_start_age is not None:
         occupational_start_age = civil_servant_start_age
@@ -472,27 +621,40 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
 
     # ── 2. 재무적 생존 여력 ─────────────────────────────
     # survival_months_at_retirement:
-    #   60세 은퇴 직후 유동성으로 공적연금 개시 전 월 적자를 몇 개월 버틸 수 있는지.
+    #   즉시유동(퇴직금 포함)으로 gap 구간 월 적자를 몇 개월 버틸 수 있는지.
+    #   보수적 지표 — 준유동은 포함하지 않음.
     # survival_months_retire:
-    #   공적연금까지 포함한 은퇴 후 월 적자를 같은 유동성으로 몇 개월 버틸 수 있는지.
+    #   gap 구간 소진 이후 남은 즉시유동으로 full 구간 적자를 몇 개월 더 버틸 수 있는지.
+    #   두 지표를 합산하면 즉시유동만의 총 런웨이를 파악할 수 있음.
     liquid = retirement_liquid_asset_total
 
-    # 은퇴 후에는 대출 상환 부담이 일부 줄어든다고 보고 월 대출상환액의 30%를 지출에서 차감한다.
-    monthly_loan = monthly_repayment_total
-    post_retire_expense = monthly_expense_total - monthly_loan * 0.3  # 일부 대출 상환 완료 가정
+    post_retirement_loan_repayment_monthly = sum(
+        loan.monthly_payment
+        for loan in loans
+        if _loan_active_at_or_after_month(loan.maturity_date, retirement_month)
+    )
+    target_retirement_living_expense = int(target_monthly_expense or 0)
+    post_retire_expense = max(
+        0,
+        (
+            target_retirement_living_expense
+            if target_retirement_living_expense > 0
+            else monthly_expense_total - monthly_repayment_total
+        )
+        + post_retirement_loan_repayment_monthly,
+    )
     gap_period_deficit = max(0, post_retire_expense - total_pension_gap)
     full_retire_deficit = max(0, post_retire_expense - total_pension_full)
     survival_months_at_retirement = round(liquid / gap_period_deficit, 1) if gap_period_deficit > 0 else 99.0
-    survival_months_retire = round(liquid / full_retire_deficit, 1) if full_retire_deficit > 0 else 99.0
+    # NOTE: survival_months_retire는 income_gap_months 확정 후 섹션 2b에서 계산한다.
 
     # ── 3. 소득 공백기와 전기간 부족액 ─────────────────
     # 60세 은퇴일 이후 공적연금이 시작될 때까지 월 단위 공백을 먼저 계산한다.
     # 이후 기대수명까지의 full구간 부족액을 합쳐 "예금을 깨도 되는가"를 판단할
     # 전기간 총 부족액을 산출한다.
-    retirement_month = _year_month_from_date(p.retire_date) or _year_month_at_age(data, RETIREMENT_AGE)
     income_gap_months = _months_between(retirement_month, public_pension_start_month)
     if income_gap_months == 0:
-        income_gap_months = max(0, public_pension_start_age - RETIREMENT_AGE) * 12
+        income_gap_months = max(0, public_pension_start_age - retirement_age) * 12
     income_gap_years = round(income_gap_months / 12, 1)
     if p.life_expectancy_age:
         life_expectancy_age = float(p.life_expectancy_age)
@@ -510,12 +672,36 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         retirement_total_shortfall_estimated - retirement_accessible_asset_total,
     )
 
+    # ── 2b. survival_months_retire 확정 (income_gap_months 확정 후) ──
+    # gap 구간 소진 후 즉시유동 잔여분으로 full 구간을 몇 달 더 버티는지.
+    imm_remaining_after_gap = max(0.0, liquid - income_gap_months * gap_period_deficit)
+    survival_months_retire = (
+        round(imm_remaining_after_gap / full_retire_deficit, 1)
+        if full_retire_deficit > 0
+        else 99.0
+    )
+
+    # ── 2c. 순차 소진 모델 ──────────────────────────────
+    _seq = _sequential_depletion(
+        gap_months=income_gap_months,
+        gap_deficit=gap_period_deficit,
+        full_months=post_public_pension_months,
+        full_deficit=full_retire_deficit,
+        pool_immediate=retirement_liquid_asset_total,
+        pool_semi=semi_liquid_asset_total,
+    )
+    immediate_exhausted_month        = _seq["immediate_exhausted_month"]
+    semi_liquid_exhausted_month      = _seq["semi_liquid_exhausted_month"]
+    gap_covered_by_immediate         = _seq["gap_covered_by_immediate"]
+    sequential_total_survival_months = _seq["sequential_total_survival_months"]
+    retirement_shortfall_sequential  = _seq["retirement_shortfall_sequential"]
+
     # ── 4. DSR ──────────────────────────────────────────
     # dsr_now는 현재 월소득 대비 대출상환 부담,
     # dsr_retire는 은퇴 후 연금소득 대비 같은 대출상환 부담을 본다.
     total_monthly_loan = monthly_repayment_total
     dsr_now    = round(total_monthly_loan / monthly_income_total * 100, 1) if monthly_income_total > 0 else 0
-    dsr_retire = round(total_monthly_loan / total_pension_full * 100, 1) if total_pension_full > 0 else 0
+    dsr_retire = round(post_retirement_loan_repayment_monthly / total_pension_full * 100, 1) if total_pension_full > 0 else 0
 
     # ── 5. 보험료 은퇴 후 부담률 ────────────────────────
     # 공적연금 개시 전 gap구간의 사적연금 소득 대비 보장성 보험료 부담률.
@@ -542,7 +728,7 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         "region":                      p.region,
         "household_size":              p.household_size,
         "employment_status":           p.employment_status,
-        "retirement_age":              RETIREMENT_AGE,
+        "retirement_age":              retirement_age,
         "years_until_retirement":      years_until_retirement,
         "service_years_current":       service_years_current,
         "service_years_at_retirement": service_years_at_retirement,
@@ -555,10 +741,14 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         "spouse_income_monthly":       spouse_income_monthly,
         "other_income_monthly":        other_income_monthly,
         "monthly_expense_total":       monthly_expense_total,
+        "target_monthly_expense":      target_retirement_living_expense,
         "essential_expense_monthly":   essential_expense_monthly,
         "insurance_premium_monthly":   insurance_premium_monthly,
         "loan_repayment_monthly":      loan_repayment_monthly,
         "net_cashflow_monthly":        net_cashflow_monthly,
+        "cashflow_volatility_12m":     cashflow_volatility_12m,
+        "emergency_fund_gap_to_3m":    emergency_fund_gap_to_3m,
+        "average_month_end_balance_12m": average_month_end_balance_12m,
         "deposit_balance_total":       deposit_balance_total,
         "immediate_liquid_asset_total": immediate_liquid_asset_total,
         "semi_liquid_asset_total":     semi_liquid_asset_total,
@@ -597,6 +787,7 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         "public_pension_start_month":  public_pension_start_month,
         "pension_start_adjustment_options": PENSION_START_ADJUSTMENT_GUIDE,
         "post_retire_expense_monthly": int(post_retire_expense),
+        "post_retirement_loan_repayment_monthly": post_retirement_loan_repayment_monthly,
         "gap_period_shortfall_monthly": int(gap_period_deficit),
         "PensionReplacementRate": pension_replacement_rate,
         "pension_replacement_rate": pension_replacement_rate,
@@ -608,6 +799,13 @@ def calculate_all_metrics(data: MyDataInput) -> dict:
         "post_public_pension_months": post_public_pension_months,
         "retirement_total_shortfall_estimated": retirement_total_shortfall_estimated,
         "retirement_total_shortfall_after_assets": retirement_total_shortfall_after_assets,
+        # ── 순차 소진 모델 결과 ──────────────────────────
+        "immediate_exhausted_month":        immediate_exhausted_month,
+        "semi_liquid_exhausted_month":      semi_liquid_exhausted_month,
+        "gap_covered_by_immediate":         gap_covered_by_immediate,
+        "sequential_total_survival_months": sequential_total_survival_months,
+        "retirement_shortfall_sequential":  retirement_shortfall_sequential,
+        # ────────────────────────────────────────────────
         "dsr_now":                 dsr_now,
         "dsr_retire":              dsr_retire,
         "insurance_burden_retire": insurance_burden_retire,
