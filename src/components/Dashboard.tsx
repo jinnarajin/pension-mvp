@@ -1,11 +1,8 @@
 // v3 - 수령방식 탭 + 공백구간 음영 + 부족시점 마커
 import { useState } from 'react';
-import type { ResultDashboardResponse } from '../services/pensionAiAgent';
 
 interface Props {
   onNext: () => void;
-  dashboard?: ResultDashboardResponse | null;
-  actions?: string[];
 }
 
 type Method = 'lumpsum' | 'ten' | 'twenty';

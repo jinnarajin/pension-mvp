@@ -13,11 +13,8 @@ import {
   fetchCustomQuestions,
   fetchAiDiagnosis,
   fetchPersona,
-  fetchResultDashboard,
   pensionInputFromMyData,
-  type AnalyzeResponse,
   type CustomQuestion,
-  type ResultDashboardResponse,
   type MyDataPayload,
 } from "./services/pensionAiAgent";
 
@@ -56,36 +53,22 @@ function App() {
   const [screen, setScreen] = useState<Screen>("onboarding");
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
   const [mydata, setMydata] = useState<MyDataPayload | undefined>();
-  const [aiResult, setAiResult] = useState<AnalyzeResponse | null>(null);
   const [customQuestions, setCustomQuestions] = useState<CustomQuestion[] | null>(null);
-  const [resultDashboard, setResultDashboard] = useState<ResultDashboardResponse | null>(null);
   const [retireAge, setRetireAge] = useState(60);
 
   const navigate = useCallback((to: Screen) => {
     setScreen(to);
   }, []);
 
-  async function loadBackendViewData(payload: MyDataPayload, nextInput: PensionInput, nextRetireAge = retireAge) {
+  async function loadBackendViewData(payload: MyDataPayload) {
     const request = {
       customer_id: "FIGMA-MAKE-MVP",
       mydata_raw: payload,
     };
 
-    const [questions, dashboard] = await Promise.allSettled([
-      fetchCustomQuestions(request),
-      fetchResultDashboard({
-        ...request,
-        retirement_age: nextRetireAge,
-        target_monthly_expense: nextInput.targetMonthlyCost,
-      }),
-    ]);
+    const questions = await fetchCustomQuestions(request).catch(() => null);
 
-    setCustomQuestions(
-      questions.status === "fulfilled"
-        ? questions.value.questions.slice(0, 3)
-        : null,
-    );
-    setResultDashboard(dashboard.status === "fulfilled" ? dashboard.value : null);
+    setCustomQuestions(questions ? questions.questions.slice(0, 3) : null);
   }
 
   async function handleSnapshotNext(values: { livingCostManwon: number; retireAge: number }) {
@@ -100,19 +83,6 @@ function App() {
     setRetireAge(values.retireAge);
     setScreen("questions");
 
-    if (mydata) {
-      try {
-        const dashboard = await fetchResultDashboard({
-          customer_id: "FIGMA-MAKE-MVP",
-          mydata_raw: mydata,
-          retirement_age: values.retireAge,
-          target_monthly_expense: targetMonthlyCost,
-        });
-        setResultDashboard(dashboard);
-      } catch {
-        setResultDashboard(null);
-      }
-    }
   }
 
   async function completeConsent() {
@@ -124,11 +94,10 @@ function App() {
       setInput(nextInput);
       setRetireAge(nextRetireAge);
       setScreen("snapshot");
-      void loadBackendViewData(payload, nextInput, nextRetireAge);
+      void loadBackendViewData(payload);
     } catch {
       setMydata(undefined);
       setCustomQuestions(null);
-      setResultDashboard(null);
       setScreen("snapshot");
     }
   }
@@ -136,14 +105,13 @@ function App() {
   async function analyzePension() {
     setScreen("analyzing");
     try {
-      const data = await fetchAiDiagnosis(
+      await fetchAiDiagnosis(
         input,
         { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: retireAge },
         mydata,
       );
-      setAiResult(data);
     } catch {
-      setAiResult(null);
+      // The prototype keeps moving even if the optional AI diagnosis call fails.
     }
   }
 
@@ -214,11 +182,7 @@ function App() {
             <Report onNext={() => navigate('dashboard')} onBack={() => navigate('analyzing')} />
           )}
           {screen === 'dashboard' && (
-            <Dashboard
-              dashboard={resultDashboard}
-              actions={aiResult?.action_items}
-              onNext={() => navigate('actions')}
-            />
+            <Dashboard onNext={() => navigate('actions')} />
           )}
           {screen === 'actions' && (
             <Actions onBack={() => navigate('dashboard')} />
