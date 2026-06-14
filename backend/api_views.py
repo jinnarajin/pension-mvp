@@ -352,6 +352,74 @@ JSON으로만 응답하세요.
     ]
 
 
+def _apply_llm_question_selection(payload: dict[str, Any], limit: int) -> dict[str, Any]:
+    """Use the LLM as the final question selector over deterministic candidates."""
+    candidate_questions = payload.get("questions", [])
+    if not candidate_questions:
+        return payload
+
+    question_pool = [
+        {
+            "question_id": question.get("question_id"),
+            "domain": question.get("domain"),
+            "domain_label": question.get("domain_label"),
+            "category": question.get("category"),
+            "target_context": question.get("target_context"),
+            "text_ko": question.get("text_ko"),
+            "response_scale": question.get("response_scale"),
+            "options": question.get("options"),
+            "reason": question.get("reason"),
+            "selection_value": question.get("selection_value"),
+            "dashboard_effect": question.get("dashboard_effect"),
+        }
+        for question in candidate_questions
+    ]
+    snapshot = {
+        "domain_gaps": payload.get("domain_gaps", []),
+        "persona_context": payload.get("persona_context", {}),
+        "context_profile": payload.get("context_profile", {}),
+        "dashboard_treatment": payload.get("dashboard_treatment", {}),
+        "priority_board": payload.get("priority_board", {}),
+        "answer_insights": payload.get("answer_insights", []),
+    }
+
+    llm_selections = _call_question_selection_llm(snapshot, question_pool, limit)
+    by_id = {question.get("question_id"): question for question in candidate_questions}
+    selected_questions = []
+    seen: set[str] = set()
+
+    for selection in llm_selections:
+        question_id = selection.get("question_id", "")
+        question = by_id.get(question_id)
+        if not question or question_id in seen:
+            continue
+        enriched = dict(question)
+        if selection.get("reason"):
+            enriched["reason"] = selection["reason"]
+        if selection.get("vulnerability_to_validate"):
+            enriched["vulnerability_to_validate"] = selection["vulnerability_to_validate"]
+        selected_questions.append(enriched)
+        seen.add(question_id)
+        if len(selected_questions) >= limit:
+            break
+
+    for question in candidate_questions:
+        question_id = question.get("question_id", "")
+        if len(selected_questions) >= limit:
+            break
+        if question_id not in seen:
+            selected_questions.append(question)
+            seen.add(question_id)
+
+    payload = dict(payload)
+    payload["selection_mode"] = "llm_adaptive_question_selector"
+    payload["llm_used"] = True
+    payload["llm_error"] = ""
+    payload["questions"] = selected_questions[:limit]
+    payload["question_count"] = len(payload["questions"])
+    return payload
+
+
 def _hydrate_question_selections(
     llm_selections: list[dict[str, str]],
     fallback_selections: list[dict[str, str]],
@@ -399,14 +467,23 @@ def select_custom_questions(
     target_monthly_expense: int | None = None,
 ) -> dict[str, Any]:
     """Adaptive questionnaire payload constrained to the approved question bank."""
-    _ = use_llm  # Kept for compatibility; this agent is deterministic for now.
+    candidate_limit = max(limit, 8) if use_llm else limit
     payload = build_adaptive_questionnaire_state(
         mydata_raw=mydata_raw,
         answer_history=answer_history or [],
-        limit=limit,
+        limit=candidate_limit,
         retirement_age=retirement_age,
         target_monthly_expense=target_monthly_expense,
     )
+    if use_llm:
+        try:
+            payload = _apply_llm_question_selection(payload, limit)
+        except Exception as e:
+            payload = dict(payload)
+            payload["llm_used"] = False
+            payload["llm_error"] = str(e)
+            payload["questions"] = payload.get("questions", [])[:limit]
+            payload["question_count"] = len(payload["questions"])
     _log_adaptive_questionnaire_selection(payload)
     return payload
 

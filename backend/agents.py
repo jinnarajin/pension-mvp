@@ -25,7 +25,6 @@ from cfpb_fwb_scorer import (
     score_cfpb_fwb_abbreviated,
     USING_OFFICIAL_LOOKUP,
 )
-from rag_terms import lookup_terms, format_term_glossary
 
 load_dotenv()
 
@@ -267,6 +266,8 @@ def adaptive_questionnaire_agent(state: AgentState) -> AgentState:
         answer_insights=payload["answer_insights"],
         priority_board=payload["priority_board"],
         persona_context=payload.get("persona_context", {}),
+        context_profile=payload.get("context_profile", {}),
+        dashboard_treatment=payload.get("dashboard_treatment", {}),
         llm_used=payload.get("llm_used", False),
         llm_error=payload.get("llm_error", ""),
     )
@@ -552,17 +553,20 @@ def pension_receipt_scenario_agent(state: AgentState) -> AgentState:
 
 def dashboard_agent(state: AgentState) -> AgentState:
     """
-    [5]의 계산 결과를 사용자 카드 리포트로 변환합니다.
-    GuardRail Agent 통과 후 최종 답변 생성.
+    계산 결과와 5축 context profile을 프론트 대시보드 계약으로 변환합니다.
+
+    이 노드는 LLM으로 긴 설명 초안을 만들지 않습니다. 프론트가 소비하는 값은
+    현금흐름 카드, 부족 원인, 액션, 맞춤 섹션 플래그이므로 계산/프로필 기반
+    구조화 데이터만 생성합니다.
     """
     mydata  = state["data_mapping"].mydata
     calc    = state["calculation"]
-    persona = state["persona"]
-    query   = state["query"]
     features = state["cashflow_snapshot"].extracted_features
     scenario = state.get("scenario_comparison")
     adaptive = state.get("adaptive_questionnaire")
     priority_board = adaptive.priority_board if adaptive else {}
+    context_profile = adaptive.context_profile if adaptive else {}
+    dashboard_treatment = adaptive.dashboard_treatment if adaptive else {}
 
     # 연금 구성 분해
     applied_public_pension_type = features.get("applied_public_pension_type", "국민연금")
@@ -576,143 +580,143 @@ def dashboard_agent(state: AgentState) -> AgentState:
     # 목표 달성률
     achievement = round(calc.pension_replacement_rate, 1) if calc.pension_replacement_rate else 0
 
-    # RAG: 질문 + 주요 피처명 기준으로 관련 금융 용어 조회
-    rag_context = " ".join([
-        query,
-        persona.persona_label,
-        " ".join(persona.flags),
-        f"DSR IRP ETF 연금대체율 소득대체율 퇴직금 국민연금 개인연금 퇴직연금",
-        " ".join(str(k) for k in features.keys()),
-    ])
-    rag_terms = lookup_terms(rag_context)
-    term_glossary = format_term_glossary(rag_terms)
+    def _level(axis: str) -> str:
+        value = context_profile.get(axis, {})
+        return value.get("level", "") if isinstance(value, dict) else ""
 
-    # 시나리오 데이터 요약 (raw dict 전체 대신 핵심 수치만 추출)
-    def _summarize_scenarios(sc) -> str:
-        if not sc:
-            return "없음"
-        lines = []
-        for s in sc.scenarios:
-            lines.append(
-                f"  [{s['title']}] "
-                f"월 수령액={s.get('monthly_pension_from_retirement_money', 0):,}원 | "
-                f"소득공백 생존여력={s.get('survival_months_gap', 0)}개월 | "
-                f"세금절감={s.get('total_tax_saving_vs_lump_sum', 0):,}원 | "
-                f"초기유동성={s.get('initial_liquidity', 0):,}원"
-            )
-        return "\n".join(lines)
+    def _manwon(value: int | float) -> int:
+        return round((value or 0) / 10_000)
 
-    scenario_summary = _summarize_scenarios(scenario)
-    recommended_id = scenario.recommended_scenario_id if scenario else ""
-    recommendation_reason = scenario.recommendation_reason if scenario else ""
-    priority_board_summary = json.dumps(priority_board, ensure_ascii=False) if priority_board else "{}"
-    adaptive_persona_context = json.dumps(adaptive.persona_context, ensure_ascii=False) if adaptive else "{}"
-    adaptive_answer_context = json.dumps(adaptive.answer_insights, ensure_ascii=False) if adaptive else "[]"
-    adaptive_question_context = json.dumps(
-        [
-            {
-                "question_id": question.get("question_id"),
-                "domain": question.get("domain"),
-                "target_context": question.get("target_context"),
-                "selection_value": question.get("selection_value"),
-                "dashboard_effect": question.get("dashboard_effect"),
-            }
-            for question in (adaptive.questions if adaptive else [])
-        ],
-        ensure_ascii=False,
+    target_expense = (
+        features.get("target_monthly_expense", 0)
+        or features.get("monthly_expense_total", 0)
+        or features.get("post_retire_expense_monthly", 0)
     )
+    public_pension = features.get("public_pension_monthly", 0)
+    private_pension = features.get("private_pension_monthly", 0)
+    expected_pension = public_pension + private_pension
+    retirement_cash_gap = max(0, target_expense - expected_pension)
+    current_net_cashflow = features.get("net_cashflow_monthly", state["cashflow_snapshot"].monthly_cashflow)
 
-    # 액션 아이템 생성
-    prompt = f"""
-연금 상담 AI입니다. 아래 분석을 바탕으로 사용자 답변 초안을 작성하세요.
-어려운 금융 용어는 괄호 안에 쉬운 설명을 덧붙여 주세요.
+    current_cashflow_level = _level("current_cashflow")
+    retirement_level = _level("retirement_readiness")
+    product_level = _level("product_understanding")
+    decision_level = _level("decision_check_behavior")
+    confidence_level = _level("financial_confidence")
 
-출력 필수 규칙:
-1. 적용 공적연금 종류가 공무원연금/군인연금/사학연금이면 국민연금 0원을 문제처럼 말하지 말고, 해당 직역연금이 공적연금으로 적용된다고 설명하세요.
-2. [시나리오 비교] 섹션을 반드시 작성하고 각 수령방식의 핵심 차이를 비교하세요.
-3. 추천 시나리오와 추천 사유를 명확히 설명하세요.
-4. 숫자는 원인과 연결해서 설명하고, 사용자가 바로 이해할 수 있는 표현을 우선하세요.
-5. [우선 해결 보드]의 primary_domain과 card_order를 반영해 가장 먼저 해결할 일을 앞부분에 설명하세요.
-6. [Adaptive Questionnaire Context]의 답변이 있으면 이를 사용자 페르소나와 설명 전략에 반드시 반영하세요.
-   특히 selection_value.affects를 보고 설명 난이도, 체크리스트 깊이, 공유 요약, guardrail, 카드 우선순위를 조정하세요.
+    cashflow_problem = {
+        "status": current_cashflow_level or ("vulnerable" if current_net_cashflow < 0 else "stable"),
+        "monthly_income": features.get("monthly_income_total", 0),
+        "monthly_expense": features.get("monthly_expense_total", 0),
+        "net_cashflow": current_net_cashflow,
+        "message": (
+            f"현재 월 현금흐름이 {_manwon(abs(current_net_cashflow))}만원 적자입니다."
+            if current_net_cashflow < 0
+            else f"현재 월 현금흐름은 {_manwon(current_net_cashflow)}만원 흑자입니다."
+        ),
+    }
+    retirement_problem = {
+        "status": retirement_level or ("monthly_shortfall" if retirement_cash_gap > 0 else "stable"),
+        "retirement_age": features.get("retirement_age", 60),
+        "public_pension_start_age": features.get("public_pension_start_age", 0),
+        "public_pension_start_month": features.get("public_pension_start_month", ""),
+        "income_gap_months": calc.income_gap_months,
+        "target_monthly_expense": target_expense,
+        "expected_monthly_pension": expected_pension,
+        "monthly_shortfall": retirement_cash_gap,
+        "message": (
+            f"은퇴 후 월 생활비 기준으로 연금보다 {_manwon(retirement_cash_gap)}만원이 부족합니다."
+            if retirement_cash_gap > 0
+            else "입력한 생활비 기준 월 연금 흐름은 부족하지 않습니다."
+        ),
+    }
+    knowledge_problem = {
+        "product_understanding": product_level or "unknown",
+        "decision_check_behavior": decision_level or "unknown",
+        "financial_confidence": confidence_level or "unknown",
+        "needs_easy_explanation": bool(dashboard_treatment.get("sections", {}).get("show_easy_explanation")),
+        "needs_product_cards": bool(dashboard_treatment.get("sections", {}).get("show_product_condition_cards")),
+        "needs_decision_checklist": bool(dashboard_treatment.get("sections", {}).get("show_decision_checklist")),
+        "needs_shared_summary": bool(dashboard_treatment.get("sections", {}).get("show_family_or_advisor_summary")),
+    }
 
-{term_glossary}
-
-질문: "{query}"
-페르소나: {persona.persona_label} (취약성 {persona.vulnerability_score}점)
-플래그: {persona.flags}
-월 부족액: {calc.shortfall_monthly:,}원
-월 총수입: {features.get("monthly_income_total", 0):,}원
-월 총지출: {features.get("monthly_expense_total", 0):,}원
-사용자 입력 기준 은퇴나이: {features.get("retirement_age", 60)}세
-사용자 입력 은퇴 후 목표 생활비: {features.get("target_monthly_expense", 0) or features.get("monthly_expense_total", 0):,}원
-은퇴 후 생활비+잔여대출 기준 지출: {features.get("post_retire_expense_monthly", 0):,}원
-월 순현금흐름: {features.get("net_cashflow_monthly", 0):,}원
-사적연금 잔액: {features.get("private_pension_balance", 0):,}원
-IRP 월 납입액: {features.get("irp_contribution_monthly", 0):,}원
-연금저축 월 납입액: {features.get("pension_savings_contribution_monthly", 0):,}원
-사적연금 월 납입 합계: {features.get("private_pension_contribution_monthly", 0):,}원
-대출잔액: {features.get("loan_balance_total", 0):,}원
-대출 상세: {features.get("loan_details", [])}
-60세 기준 퇴직금/퇴직수당 추정액: {features.get("retirement_lump_sum_estimated", 0):,}원
-퇴직금/퇴직수당 산식 유형: {features.get("retirement_lump_sum_type", "")}
-은퇴 시점 근속연수: {features.get("service_years_at_retirement", 0)}년
-즉시유동자산: {features.get("immediate_liquid_asset_total", 0):,}원
-준유동자산(해지 시나리오 대상): {features.get("semi_liquid_asset_total", 0):,}원
-비유동 계좌자산: {features.get("illiquid_account_asset_total", 0):,}원
-적용 공적연금 종류: {applied_public_pension_type}
-공적연금 수급 개시: {features.get("public_pension_start_age", 0)}세 / {features.get("public_pension_start_month", "")}
-공적연금 월수령 추정액: {features.get("public_pension_monthly", 0):,}원
-국민연금 추정액: {features.get("estimated_national_pension_monthly", 0):,}원
-직역연금 월수령액: {features.get("occupational_public_pension_monthly", 0):,}원
-연금 수령시기 조정 옵션: {features.get("pension_start_adjustment_options", {})}
-PensionReplacementRate: {features.get("PensionReplacementRate", 0)}%
-소득 공백기: {calc.income_gap_years}년({calc.income_gap_months}개월)
-즉시유동 gap 구간 생존여력: {calc.survival_months_at_retirement}개월 (보수적 — 준유동 미포함)
-즉시유동 gap 소진 후 full 구간 추가 생존: {calc.survival_months_retire}개월
-유동+준유동 순차소진 총 생존: {calc.sequential_total_survival_months}개월
-  └ gap 즉시유동 단독 커버: {"가능" if calc.gap_covered_by_immediate else "불가 — 준유동 투입 필요"}
-  └ 즉시유동 소진 시점: 은퇴 후 {calc.immediate_exhausted_month}개월
-  └ 준유동까지 소진 시점: 은퇴 후 {calc.semi_liquid_exhausted_month}개월
-기대수명 기준 총 은퇴 부족액: {calc.retirement_total_shortfall_estimated:,}원
-순차소진 후 최종 부족액: {calc.retirement_shortfall_sequential:,}원
-
-[수령방식 시나리오 비교]
-{scenario_summary}
-추천 시나리오: {recommended_id}
-추천 사유: {recommendation_reason}
-
-[우선 해결 보드]
-{priority_board_summary}
-
-[Adaptive Questionnaire Context]
-cashflow/retirement persona context:
-{adaptive_persona_context}
-
-사용자 답변 해석:
-{adaptive_answer_context}
-
-선택 질문의 downstream 영향도:
-{adaptive_question_context}
-"""
-    draft = _llm_text(prompt, 1500)
+    focus_cards = []
+    if cashflow_problem["status"] == "vulnerable":
+        focus_cards.append({
+            "id": "current_cashflow",
+            "title": "현재 현금흐름",
+            "severity": "high" if current_net_cashflow < 0 else "medium",
+            "description": cashflow_problem["message"],
+        })
+    if retirement_problem["status"] in {"income_gap", "monthly_shortfall"} or retirement_cash_gap > 0:
+        focus_cards.append({
+            "id": "retirement_cashflow",
+            "title": "은퇴 이후 현금흐름",
+            "severity": "high" if retirement_cash_gap > 0 else "medium",
+            "description": retirement_problem["message"],
+        })
+    if product_level == "low":
+        focus_cards.append({
+            "id": "product_understanding",
+            "title": "상품 조건 이해",
+            "severity": "medium",
+            "description": "연금, 대출, 보험 조건을 먼저 확인할 수 있게 설명을 쉽게 보여줘야 합니다.",
+        })
+    if decision_level == "low":
+        focus_cards.append({
+            "id": "decision_check_behavior",
+            "title": "결정 전 확인",
+            "severity": "medium",
+            "description": "수령방식 선택 전에 확인해야 할 항목을 체크리스트로 보여줘야 합니다.",
+        })
+    if confidence_level == "low":
+        focus_cards.append({
+            "id": "financial_confidence",
+            "title": "공유용 요약",
+            "severity": "medium",
+            "description": "혼자 판단하기 어렵다면 가족이나 상담사에게 보여줄 짧은 요약이 필요합니다.",
+        })
+    if not focus_cards:
+        focus_cards.append({
+            "id": "retirement_cashflow",
+            "title": "은퇴 이후 현금흐름",
+            "severity": "low",
+            "description": retirement_problem["message"],
+        })
 
     action_items = []
-    if calc.shortfall_monthly > 0:
-        action_items.append(f"월 {calc.shortfall_monthly//10000}만원 추가 납입 필요")
+    if retirement_cash_gap > 0:
+        action_items.append(f"은퇴 후 월 부족액 {_manwon(retirement_cash_gap)}만원 보완 계획 세우기")
+    if calc.income_gap_months > 0:
+        action_items.append(f"공적연금 전 소득공백 {calc.income_gap_months}개월 동안 쓸 자금 분리하기")
     if not calc.gap_covered_by_immediate:
-        action_items.append(
-            f"소득공백 {calc.income_gap_months}개월을 즉시유동만으로 커버 불가 — "
-            f"은퇴 후 {calc.immediate_exhausted_month:.0f}개월째 준유동 해지 필요"
+        action_items.append(f"은퇴 후 {calc.immediate_exhausted_month:.0f}개월째 준유동자산 사용 여부 점검하기")
+    if product_level == "low":
+        action_items.append("연금·대출·보험의 수령 조건과 중도해지 조건 먼저 확인하기")
+    if decision_level == "low":
+        action_items.append("수령방식 선택 전 세금, 월수령액, 초기 유동성 체크리스트 확인하기")
+    if confidence_level == "low":
+        action_items.append("가족 또는 상담사에게 보여줄 요약으로 결정 근거 함께 점검하기")
+    action_items = action_items[:3]
+
+    shortage_age = None
+    if calc.sequential_total_survival_months and calc.sequential_total_survival_months < 990:
+        shortage_age = features.get("retirement_age", 60) + int(calc.sequential_total_survival_months // 12)
+    if retirement_cash_gap > 0:
+        draft = (
+            f"입력한 은퇴 후 월 생활비는 {_manwon(target_expense)}만원이고, 예상 월 연금은 "
+            f"{_manwon(expected_pension)}만원입니다. 차액 {_manwon(retirement_cash_gap)}만원을 "
+            "보유 자산에서 메우는 구조라서 자산 소진 시점을 함께 봐야 합니다."
         )
-    if calc.sequential_total_survival_months < 24:
-        action_items.append(
-            f"유동+준유동 순차소진 시 생존여력 {calc.sequential_total_survival_months:.1f}개월 — 긴급 대비 필요"
+        if shortage_age:
+            draft += f" 현재 계산 기준 부족 예상 시점은 {shortage_age}세 전후입니다."
+    elif current_net_cashflow < 0:
+        draft = (
+            f"현재 월 현금흐름이 {_manwon(abs(current_net_cashflow))}만원 적자라서 "
+            "은퇴 준비보다 먼저 현재 지출과 고정 납입 구조를 점검해야 합니다."
         )
-    elif calc.survival_months_retire < 12:
-        action_items.append(
-            f"즉시유동 gap 소진 후 추가 여력 {calc.survival_months_retire:.1f}개월 — 준유동 활용 계획 수립 필요"
-        )
+    else:
+        draft = "현재 입력값 기준으로는 가장 큰 확인 지점이 은퇴 이후 현금흐름과 수령방식 선택입니다."
 
     result = DashboardCard(
         pension_breakdown=pension_breakdown,
@@ -732,8 +736,19 @@ cashflow/retirement persona context:
             "semi_liquid_exhausted_month": calc.semi_liquid_exhausted_month,
             "gap_covered_by_immediate": calc.gap_covered_by_immediate,
             "sequential_total_survival_months": calc.sequential_total_survival_months,
-            "rag_terms": rag_terms,
+            "applied_public_pension_type": applied_public_pension_type,
+            "target_monthly_expense": target_expense,
+            "expected_monthly_pension": expected_pension,
+            "monthly_retirement_cash_gap": retirement_cash_gap,
+            "current_cashflow_problem": cashflow_problem,
+            "retirement_cashflow_problem": retirement_problem,
+            "knowledge_problem": knowledge_problem,
+            "focus_cards": focus_cards,
             "priority_board": priority_board,
+            "context_profile": context_profile,
+            "dashboard_treatment": dashboard_treatment,
+            "recommended_scenario_id": scenario.recommended_scenario_id if scenario else "",
+            "recommendation_reason": scenario.recommendation_reason if scenario else "",
         }
     )
     print(f"[6] Dashboard — 달성률: {achievement}% | 액션: {len(action_items)}개")

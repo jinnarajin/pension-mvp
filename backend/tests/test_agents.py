@@ -206,24 +206,33 @@ def test_pension_receipt_scenario_agent_returns_comparison(base_state):
     assert comparison.tool_trace[0]["tool"] == "calculate_lump_sum_receipt"
 
 
-def test_dashboard_preserves_occupational_pension_and_exposes_rag_terms(base_state, monkeypatch):
+def test_dashboard_preserves_occupational_pension_and_uses_frontend_contract(base_state, monkeypatch):
     s = agents.supervisor_agent_check(
         agents.cashflow_snapshot(agents.backend_data_mapping(base_state))
     )
+    s = agents.adaptive_questionnaire_agent(s)
     s = agents.question_routing_agent(s)
     s = agents.persona_classifier(s)
     s = agents.final_cashflow_calculation(s)
     s = agents.pension_receipt_scenario_agent(s)
-    monkeypatch.setattr(agents, "_llm_text", lambda prompt, max_tokens=700: prompt)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("dashboard_agent should not call LLM")
+
+    monkeypatch.setattr(agents, "_llm_text", fail_if_called)
 
     out = agents.dashboard_agent(s)
     dashboard = out["dashboard"]
 
     assert dashboard.pension_breakdown["공무원연금"] == 1_850_000
     assert dashboard.pension_breakdown["공적연금(계산 적용)"] == 1_850_000
-    assert dashboard.timeline_data["rag_terms"]
-    assert "[수령방식 시나리오 비교]" in out["final_response"]
-    assert "추천 시나리오" in out["final_response"]
+    assert dashboard.timeline_data["current_cashflow_problem"]["net_cashflow"] == 1_289_333
+    assert dashboard.timeline_data["retirement_cashflow_problem"]["target_monthly_expense"] == 4_333_333
+    assert dashboard.timeline_data["knowledge_problem"]["needs_easy_explanation"] is False
+    assert dashboard.timeline_data["focus_cards"]
+    assert dashboard.timeline_data["context_profile"]
+    assert dashboard.timeline_data["dashboard_treatment"]
+    assert "은퇴 후 월 생활비" in out["final_response"]
 
 
 # ── update_user_state ───────────────────────────────────────

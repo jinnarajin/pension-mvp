@@ -89,6 +89,8 @@ class AdaptiveQuestionnaireResult:
     answer_insights: list[dict]
     priority_board: dict
     persona_context: dict = field(default_factory=dict)
+    context_profile: dict = field(default_factory=dict)
+    dashboard_treatment: dict = field(default_factory=dict)
     llm_used: bool = False
     llm_error: str = ""
 
