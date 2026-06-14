@@ -1,172 +1,219 @@
-import type { StatusCheckResponse } from '../services/pensionAiAgent';
+import { useState, type ChangeEvent } from 'react';
+
+interface SnapshotValues {
+  livingCostManwon: number;
+  retireAge: number;
+}
 
 interface Props {
-  onNext: () => void;
-  status?: StatusCheckResponse | null;
+  onNext: (values: SnapshotValues) => void;
 }
 
-function formatManwon(value: number) {
-  const manwon = Math.round(value / 10_000);
-  if (manwon >= 10_000) {
-    const eok = Math.floor(manwon / 10_000);
-    const rest = manwon % 10_000;
-    return rest > 0 ? `${eok}억 ${rest.toLocaleString('ko-KR')}만원` : `${eok}억원`;
-  }
-  return `${manwon.toLocaleString('ko-KR')}만원`;
-}
+const MIN_AGE = 50;
+const MAX_AGE = 80;
 
-function formatMonthly(value: number) {
-  return `월 ${formatManwon(value)}`;
-}
+export function Snapshot({ onNext }: Props) {
+  const [livingCost, setLivingCost] = useState('');
+  const [retireAge, setRetireAge] = useState<number | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [isAgeOpen, setIsAgeOpen] = useState(false);
 
-const fallbackStatus: StatusCheckResponse = {
-  customer_id: 'fallback',
-  expected_monthly_pension: 870_000,
-  expected_monthly_pension_start_age: 65,
-  financial_asset_total: 234_000_000,
-  loan_balance_total: 0,
-  current_monthly_living_expense: 2_300_000,
-  currency: 'KRW',
-};
+  const parsed = parseInt(livingCost, 10);
+  const isValidCost = !isNaN(parsed) && parsed > 0;
+  const canContinue = isValidCost && retireAge !== null;
 
-function buildData(status: StatusCheckResponse) {
-  return [
-  {
-    label: '국민연금 예상 수령액',
-    value: formatMonthly(status.expected_monthly_pension),
-    note: `${status.expected_monthly_pension_start_age}세 수령 기준`,
-    color: '#2A7BD6',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <rect x="2" y="4" width="16" height="12" rx="2" stroke="#2A7BD6" strokeWidth="1.5"/>
-        <path d="M6 10 L14 10 M6 13 L10 13" stroke="#2A7BD6" strokeWidth="1.5" strokeLinecap="round"/>
-      </svg>
-    ),
-  },
-  {
-    label: '금융 자산 총액',
-    value: formatManwon(status.financial_asset_total),
-    note: '예금·적금·펀드 합산',
-    color: '#0D2B6B',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <path d="M10 2 L18 6 L18 10 C18 14 14 17 10 18 C6 17 2 14 2 10 L2 6 Z" stroke="#0D2B6B" strokeWidth="1.5" strokeLinejoin="round"/>
-      </svg>
-    ),
-  },
-  {
-    label: '예상 월 생활비',
-    value: formatMonthly(status.current_monthly_living_expense),
-    note: '현재 지출 기준 추정',
-    color: '#6B7280',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <path d="M3 7 L17 7 M5 7 L5 16 L15 16 L15 7" stroke="#6B7280" strokeWidth="1.5" strokeLinejoin="round"/>
-        <path d="M8 7 L8 4 L12 4 L12 7" stroke="#6B7280" strokeWidth="1.5" strokeLinejoin="round"/>
-      </svg>
-    ),
-  },
-  ];
-}
+  const handleInput = (e: ChangeEvent<HTMLInputElement>) => {
+    setLivingCost(e.target.value.replace(/[^0-9]/g, ''));
+  };
 
-export function Snapshot({ onNext, status }: Props) {
-  const snapshot = status ?? fallbackStatus;
-  const data = buildData(snapshot);
-  const gap = Math.max(0, snapshot.current_monthly_living_expense - snapshot.expected_monthly_pension);
+  const handleNext = () => {
+    if (!canContinue || retireAge === null) return;
+    onNext({ livingCostManwon: parsed, retireAge });
+  };
 
   return (
-    <div className="h-full flex flex-col bg-white overflow-y-auto">
-      {/* Top status header */}
+    <div className="h-full flex flex-col bg-white">
+      {/* Header */}
       <div className="flex-none px-6 pt-14 pb-6">
         <div className="flex items-center gap-2 mb-6">
           {[1, 2, 3, 4].map((i) => (
-            <div
-              key={i}
-              className="h-1 flex-1 rounded-full"
-              style={{ background: i <= 2 ? '#2A7BD6' : '#E5E7EB' }}
-            />
+            <div key={i} className="h-1 flex-1 rounded-full" style={{ background: i <= 2 ? '#2A7BD6' : '#E5E7EB' }} />
           ))}
         </div>
-
-        {/* Success state */}
-        <div className="flex items-center gap-3 mb-4">
-          <div
-            className="flex items-center justify-center w-9 h-9 rounded-full"
-            style={{ background: '#ECFDF5' }}
-          >
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <path d="M4 9 L7.5 12.5 L14 5.5" stroke="#37C27B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center justify-center w-8 h-8 rounded-full" style={{ background: '#ECFDF5' }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M3 8 L6.5 11.5 L13 4.5" stroke="#37C27B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
-          <span
-            className="rounded-full px-3 py-1"
-            style={{ background: '#ECFDF5', color: '#059669', fontSize: '13px', fontWeight: 600 }}
-          >
+          <span className="rounded-full px-3 py-1" style={{ background: '#ECFDF5', color: '#059669', fontSize: '13px', fontWeight: 600 }}>
             연결 완료
           </span>
         </div>
         <h2 style={{ fontSize: '24px', fontWeight: 700, color: '#1F2937', lineHeight: '140%' }}>
-          현재 상황을<br />파악했어요.
+          목표를 알려주세요.
         </h2>
         <p style={{ fontSize: '15px', color: '#6B7280', marginTop: '6px', lineHeight: '150%' }}>
-          아래 내용을 확인하고 분석을 시작해요.
+          연금·자산 데이터는 연결됐어요.<br />이제 계획을 입력해 주세요.
         </p>
       </div>
 
-      {/* Data cards */}
-      <div className="flex-1 px-6 space-y-3">
-        {data.map((item) => (
-          <div
-            key={item.label}
-            className="p-5 rounded-2xl"
-            style={{ border: '1px solid #E5E7EB' }}
-          >
-            <div className="flex items-center gap-2 mb-3">
-              {item.icon}
-              <span style={{ fontSize: '13px', color: '#6B7280', fontWeight: 500 }}>{item.label}</span>
-            </div>
-            <p style={{ fontSize: '26px', fontWeight: 700, color: item.color, letterSpacing: '-0.5px' }}>
-              {item.value}
-            </p>
-            <p style={{ fontSize: '13px', color: '#9CA3AF', marginTop: '4px' }}>{item.note}</p>
-          </div>
-        ))}
+      {/* Inputs */}
+      <div className="flex-1 px-6 space-y-5 overflow-y-auto pb-6">
 
-        {/* Gap preview */}
-        <div
-          className="p-5 rounded-2xl"
-          style={{ background: '#EBF2FC' }}
-        >
-          <div className="flex items-start gap-3">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style={{ marginTop: '2px', flexShrink: 0 }}>
-              <circle cx="10" cy="10" r="8" stroke="#2A7BD6" strokeWidth="1.5"/>
-              <path d="M10 6 L10 10" stroke="#2A7BD6" strokeWidth="2" strokeLinecap="round"/>
-              <circle cx="10" cy="13.5" r="1" fill="#2A7BD6"/>
-            </svg>
-            <div>
-              <p style={{ fontSize: '15px', fontWeight: 600, color: '#0D2B6B' }}>
-                월 {formatManwon(gap)} 차이가 있어요.
-              </p>
-              <p style={{ fontSize: '13px', color: '#4B7CBD', marginTop: '4px', lineHeight: '150%' }}>
-                연금 수령액({formatManwon(snapshot.expected_monthly_pension)})과 생활비({formatManwon(snapshot.current_monthly_living_expense)}) 사이 차이예요. 추가 분석을 통해 준비 방법을 알아볼게요.
-              </p>
-            </div>
+        {/* 은퇴 후 월 생활비 */}
+        <div>
+          <label style={{ fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '10px', display: 'block' }}>
+            은퇴 후 예상 월 생활비
+            <span style={{ color: '#EF4444', marginLeft: '3px' }}>*</span>
+          </label>
+          <div
+            className="flex items-center gap-3 px-5 rounded-2xl transition-all"
+            style={{
+              height: '64px',
+              border: `1.5px solid ${focused || isValidCost ? '#2A7BD6' : '#E5E7EB'}`,
+              background: isValidCost ? '#EBF2FC' : '#FAFAFA',
+              boxShadow: focused ? '0 0 0 3px rgba(42,123,214,0.10)' : 'none',
+            }}
+          >
+            <input
+              type="tel"
+              inputMode="numeric"
+              value={livingCost}
+              onChange={handleInput}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              placeholder="예: 230"
+              className="flex-1 bg-transparent outline-none"
+              style={{
+                fontSize: '24px',
+                fontWeight: isValidCost ? 700 : 400,
+                color: isValidCost ? '#0D2B6B' : '#9CA3AF',
+                width: '100%',
+              }}
+            />
+            <span style={{ fontSize: '16px', fontWeight: 600, color: isValidCost ? '#4B7CBD' : '#D1D5DB', flexShrink: 0 }}>
+              만원 / 월
+            </span>
           </div>
+          <p style={{ fontSize: '13px', color: '#9CA3AF', marginTop: '8px', paddingLeft: '4px' }}>
+            현재 지출이 기준이에요. 대략적으로 입력해도 괜찮아요.
+          </p>
         </div>
+
+        {/* 예상 은퇴 시점 */}
+        <div>
+          <label style={{ fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '10px', display: 'block' }}>
+            예상 은퇴 시점
+            <span style={{ color: '#EF4444', marginLeft: '3px' }}>*</span>
+          </label>
+
+          {/* 드롭다운 트리거 */}
+          <button
+            onClick={() => setIsAgeOpen((open) => !open)}
+            className="w-full flex items-center justify-between px-5 rounded-2xl transition-all"
+            style={{
+              height: '64px',
+              border: `1.5px solid ${retireAge || isAgeOpen ? '#2A7BD6' : '#E5E7EB'}`,
+              background: retireAge ? '#EBF2FC' : '#FAFAFA',
+              boxShadow: isAgeOpen ? '0 0 0 3px rgba(42,123,214,0.10)' : 'none',
+            }}
+            id="retire-trigger"
+            aria-haspopup="listbox"
+            aria-expanded={isAgeOpen}
+          >
+            <span style={{
+              fontSize: '20px',
+              fontWeight: retireAge ? 700 : 400,
+              color: retireAge ? '#0D2B6B' : '#9CA3AF',
+            }}>
+              {retireAge ? `${retireAge}세 은퇴 예정` : '나이를 선택해 주세요'}
+            </span>
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 18 18"
+              fill="none"
+              style={{ flexShrink: 0, transform: isAgeOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }}
+            >
+              <path d="M5 7 L9 11 L13 7" stroke={retireAge ? '#2A7BD6' : '#9CA3AF'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+
+          {/* 스크롤 가능한 드롭다운 목록 */}
+          {isAgeOpen && (
+            <div
+              className="mt-2 rounded-2xl overflow-y-auto"
+              role="listbox"
+              aria-labelledby="retire-trigger"
+              style={{
+                maxHeight: '220px',
+                border: '1.5px solid #BFDBFE',
+                background: 'white',
+                boxShadow: '0 8px 24px rgba(42,123,214,0.12)',
+              }}
+            >
+              {Array.from({ length: MAX_AGE - MIN_AGE + 1 }, (_, i) => MIN_AGE + i).map((age, i) => (
+                <button
+                  key={age}
+                  onClick={() => {
+                    setRetireAge(age);
+                    setIsAgeOpen(false);
+                  }}
+                  className="w-full flex items-center justify-between px-5 transition-colors"
+                  role="option"
+                  aria-selected={retireAge === age}
+                  style={{
+                    height: '48px',
+                    background: retireAge === age ? '#EBF2FC' : 'white',
+                    borderTop: i > 0 ? '1px solid #F3F4F6' : 'none',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{
+                    fontSize: '16px',
+                    color: retireAge === age ? '#0D2B6B' : '#374151',
+                    fontWeight: retireAge === age ? 700 : 400,
+                  }}>
+                    {age}세
+                  </span>
+                  {retireAge === age && (
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                      <path d="M3 8 L6.5 11.5 L13 4.5" stroke="#2A7BD6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          <p style={{ fontSize: '13px', color: '#9CA3AF', marginTop: '8px', paddingLeft: '2px' }}>
+            50~80세, 1살 단위로 선택할 수 있어요.
+          </p>
+        </div>
+
       </div>
 
       {/* CTA */}
-      <div className="flex-none px-6 pb-8 pt-6">
+      <div className="flex-none px-6 pb-8 pt-4">
         <button
-          onClick={onNext}
-          className="w-full flex items-center justify-center rounded-xl text-white"
-          style={{ background: '#2A7BD6', height: '54px', fontSize: '17px', fontWeight: 700 }}
+          onClick={handleNext}
+          disabled={!canContinue}
+          className="w-full flex items-center justify-center rounded-xl transition-all"
+          style={{
+            background: canContinue ? '#2A7BD6' : '#E5E7EB',
+            color: canContinue ? '#FFFFFF' : '#9CA3AF',
+            height: '56px',
+            fontSize: '17px',
+            fontWeight: 700,
+          }}
         >
-          분석 정확도 높이기
+          {canContinue ? '분석 정확도 높이기' : '위 항목을 모두 입력해 주세요'}
         </button>
-        <p className="text-center mt-3" style={{ fontSize: '13px', color: '#9CA3AF' }}>
-          2~3가지 질문에 답하면 더 정확해져요.
-        </p>
+        {canContinue && (
+          <p className="text-center mt-3" style={{ fontSize: '13px', color: '#9CA3AF' }}>
+            2~3가지 질문에 답하면 더 정확해져요.
+          </p>
+        )}
       </div>
     </div>
   );
