@@ -239,14 +239,20 @@ assert.equal(dashboard.recommendedScenarioId, "annuity_10y");
 
 const lumpScenarioPoints = buildScenarioProjectionPoints(dashboard.chartPoints, analysis.scenario_comparison.scenarios[0], 60);
 const annuityScenarioPoints = buildScenarioProjectionPoints(dashboard.chartPoints, analysis.scenario_comparison.scenarios[1], 60);
-assert.deepEqual(
+assert.notDeepEqual(
   lumpScenarioPoints.map((point) => point.assetBalanceManwon),
   annuityScenarioPoints.map((point) => point.assetBalanceManwon),
 );
-assert.equal(
-  lumpScenarioPoints.find((point) => point.isShortagePoint)?.age,
-  annuityScenarioPoints.find((point) => point.isShortagePoint)?.age,
+assert.equal(lumpScenarioPoints.find((point) => point.isShortagePoint)?.age, 78);
+assert.equal(annuityScenarioPoints.find((point) => point.isShortagePoint)?.age, 83);
+assert.ok(lumpScenarioPoints.length > dashboard.chartPoints.length);
+assert.ok(
+  Math.max(...lumpScenarioPoints.slice(1).map((point, index) => Math.abs(point.assetBalanceManwon - lumpScenarioPoints[index].assetBalanceManwon))) < 8000,
 );
+const preShortageLump = lumpScenarioPoints.filter((point) => point.age >= 60 && point.age <= 78);
+const annualDrops = preShortageLump.slice(1).map((point, index) => preShortageLump[index].assetBalanceManwon - point.assetBalanceManwon);
+assert.ok(Math.max(...annualDrops) - Math.min(...annualDrops) < 200);
+assert.ok(lumpScenarioPoints.at(-1).assetBalanceManwon < lumpScenarioPoints.find((point) => point.isShortagePoint).assetBalanceManwon);
 
 const actions = buildActionViewModel(analysis);
 assert.equal(actions[0].title, "IRP 추가 납입 검토");
