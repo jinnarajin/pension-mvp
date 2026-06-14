@@ -1,42 +1,30 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 interface Props {
   onNext: () => void;
+  isComplete?: boolean;
+  error?: string | null;
+  progress?: number;
+  stageLabel?: string;
 }
 
 const steps = [
-  { label: '국민연금 수령 시나리오 계산 중', delay: 0 },
-  { label: '자산 변화 흐름 예측 중', delay: 1200 },
-  { label: '생활비 패턴 분석 중', delay: 2400 },
-  { label: '노후 현금흐름 종합 분석 중', delay: 3600 },
+  { label: '답변 기반 질문 우선순위 재선택', threshold: 20 },
+  { label: '최종 AI 분석 실행', threshold: 45 },
+  { label: '자산 변화 흐름 예측', threshold: 75 },
+  { label: '노후 현금흐름 종합 정리', threshold: 100 },
 ];
 
-export function Analyzing({ onNext }: Props) {
-  const [completedSteps, setCompletedSteps] = useState<number[]>([]);
-  const [progress, setProgress] = useState(0);
+export function Analyzing({ onNext, isComplete = true, error, progress = 0, stageLabel = '분석을 준비하고 있어요.' }: Props) {
+  const displayProgress = progress;
 
   useEffect(() => {
-    const stepTimers = steps.map((step, i) =>
-      window.setTimeout(() => {
-        setCompletedSteps((prev) => [...prev, i]);
-        setProgress(Math.round(((i + 1) / steps.length) * 100));
-      }, step.delay + 600),
-    );
-
+    if (!isComplete) return;
     const finishTimer = window.setTimeout(() => {
       onNext();
-    }, 5200);
-
-    const progressTimer = window.setInterval(() => {
-      setProgress((p) => Math.min(p + 1, 99));
-    }, 50);
-
-    return () => {
-      stepTimers.forEach((timer) => window.clearTimeout(timer));
-      window.clearTimeout(finishTimer);
-      window.clearInterval(progressTimer);
-    };
-  }, [onNext]);
+    }, 700);
+    return () => window.clearTimeout(finishTimer);
+  }, [isComplete, onNext]);
 
   return (
     <div className="h-full flex flex-col items-center justify-center bg-white px-6">
@@ -46,31 +34,36 @@ export function Analyzing({ onNext }: Props) {
           <circle cx="60" cy="60" r="52" fill="none" stroke="#E5E7EB" strokeWidth="6"/>
           <circle
             cx="60" cy="60" r="52" fill="none"
-            stroke="#2A7BD6" strokeWidth="6"
-            strokeLinecap="round"
-            strokeDasharray={`${2 * Math.PI * 52}`}
-            strokeDashoffset={`${2 * Math.PI * 52 * (1 - progress / 100)}`}
-            style={{ transition: 'stroke-dashoffset 0.4s ease' }}
-          />
-        </svg>
-        <div className="absolute flex flex-col items-center">
-          <span style={{ fontSize: '26px', fontWeight: 700, color: '#0D2B6B' }}>{progress}%</span>
-          <span style={{ fontSize: '12px', color: '#6B7280' }}>분석 중</span>
-        </div>
-      </div>
+	            stroke="#2A7BD6" strokeWidth="6"
+	            strokeLinecap="round"
+	            strokeDasharray={`${2 * Math.PI * 52}`}
+	            strokeDashoffset={`${2 * Math.PI * 52 * (1 - displayProgress / 100)}`}
+	            style={{ transition: 'stroke-dashoffset 0.4s ease' }}
+	          />
+	        </svg>
+	        <div className="absolute flex flex-col items-center">
+	          <span style={{ fontSize: '26px', fontWeight: 700, color: '#0D2B6B' }}>{displayProgress}%</span>
+	          <span style={{ fontSize: '12px', color: '#6B7280' }}>분석 중</span>
+	        </div>
+	      </div>
 
       <h2 style={{ fontSize: '22px', fontWeight: 700, color: '#1F2937', textAlign: 'center', marginBottom: '6px' }}>
         분석하고 있어요.
       </h2>
       <p style={{ fontSize: '15px', color: '#6B7280', textAlign: 'center', marginBottom: '36px', lineHeight: '150%' }}>
-        연금과 자산을 기반으로<br />노후 현금흐름을 계산하고 있어요.
-      </p>
+        {error ? (
+          <>일부 분석은 불러오지 못했지만<br />계산 가능한 결과를 정리하고 있어요.</>
+        ) : (
+	          <>{stageLabel}</>
+	        )}
+	      </p>
 
       {/* Steps list */}
       <div className="w-full space-y-3">
-        {steps.map((step, i) => {
-          const done = completedSteps.includes(i);
-          const active = !done && i === completedSteps.length;
+	        {steps.map((step, i) => {
+	          const done = displayProgress >= step.threshold;
+	          const prevThreshold = steps[i - 1]?.threshold ?? 0;
+	          const active = !done && displayProgress >= prevThreshold;
           return (
             <div
               key={step.label}
