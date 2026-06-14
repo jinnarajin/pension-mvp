@@ -38,11 +38,13 @@ def base_state(mydata_raw):
         "query": "test",
         "mydata_raw": mydata_raw,
         "cfpb_input": None,
+        "adaptive_answer_history": [],
         "scenario_options": None,
         "feature_change": None,
         "needs_reanalysis": True,
         "data_mapping": None,
         "cashflow_snapshot": None,
+        "adaptive_questionnaire": None,
         "routing": None,
         "persona": None,
         "calculation": None,
@@ -133,6 +135,19 @@ def test_cashflow_snapshot_aggregates_from_monthly(base_state):
     assert "switch_score" not in snap.extracted_features
 
 
+def test_cashflow_snapshot_uses_user_retirement_age_and_target_expense(base_state):
+    state = {
+        **base_state,
+        "scenario_options": ScenarioOptions(retirement_age=62, target_monthly_expense=4_000_000),
+    }
+    s2 = agents.cashflow_snapshot(agents.backend_data_mapping(state))
+    snap = s2["cashflow_snapshot"]
+
+    assert snap.extracted_features["retirement_age"] == 62
+    assert snap.extracted_features["post_retire_expense_monthly"] == 4_000_000
+    assert snap.extracted_features["shortfall_monthly"] == 1_750_000
+
+
 # ── supervisor_agent_check ──────────────────────────────────
 
 def test_supervisor_appends_anomalies_list(base_state):
@@ -147,7 +162,7 @@ def test_supervisor_appends_anomalies_list(base_state):
 def test_question_routing_defaults_when_cfpb_missing(base_state):
     out = agents.question_routing_agent(base_state)
     assert out["routing"].fwb_score == 50
-    assert out["routing"].intent == "cfpb_skipped"
+    assert out["routing"].intent == "adaptive_questionnaire_primary"
 
 
 # ── persona_classifier ────────────────────────────────────
