@@ -1,24 +1,23 @@
-import { useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import "./App.css";
+import { Actions } from "./components/Actions";
 import { Analyzing } from "./components/Analyzing";
 import { DataConsent } from "./components/DataConsent";
 import { Dashboard } from "./components/Dashboard";
 import { Onboarding } from "./components/Onboarding";
 import { Questions } from "./components/Questions";
+import { Report } from "./components/Report";
 import { Snapshot } from "./components/Snapshot";
 import type { PensionInput } from "./models/pension";
-import { diagnose, formatKRW, formatPercent } from "./services/pensionCalculator";
 import {
   fetchCustomQuestions,
   fetchAiDiagnosis,
   fetchPersona,
   fetchResultDashboard,
-  fetchStatusCheck,
   pensionInputFromMyData,
   type AnalyzeResponse,
   type CustomQuestion,
   type ResultDashboardResponse,
-  type StatusCheckResponse,
   type MyDataPayload,
 } from "./services/pensionAiAgent";
 
@@ -42,14 +41,15 @@ const DEFAULT_INPUT: PensionInput = {
   loan: 10000000,
 };
 
-const SCREEN_LABELS: Partial<Record<Screen, string>> = {
-  consent: "정보 연결",
-  snapshot: "데이터 확인",
-  questions: "간단 질문",
-  analyzing: "AI 분석",
-  dashboard: "진단 결과",
-  report: "상세 리포트",
-  actions: "실행 계획",
+const screenLabels: Record<Screen, string> = {
+  onboarding: '시작',
+  consent: '데이터 연동',
+  snapshot: '현황 확인',
+  questions: '맞춤 질문',
+  analyzing: '분석 중',
+  report: '분석 결과',
+  dashboard: '수령 시뮬레이션',
+  actions: '추천 행동',
 };
 
 function App() {
@@ -57,33 +57,29 @@ function App() {
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
   const [mydata, setMydata] = useState<MyDataPayload | undefined>();
   const [aiResult, setAiResult] = useState<AnalyzeResponse | null>(null);
-  const [statusCheck, setStatusCheck] = useState<StatusCheckResponse | null>(null);
   const [customQuestions, setCustomQuestions] = useState<CustomQuestion[] | null>(null);
   const [resultDashboard, setResultDashboard] = useState<ResultDashboardResponse | null>(null);
-  const result = useMemo(() => diagnose(input), [input]);
+  const [retireAge, setRetireAge] = useState(60);
 
-  const progress = useMemo(() => {
-    const order: Screen[] = ["consent", "snapshot", "questions", "analyzing", "dashboard", "report", "actions"];
-    return Math.max(0, order.indexOf(screen) + 1);
-  }, [screen]);
+  const navigate = useCallback((to: Screen) => {
+    setScreen(to);
+  }, []);
 
-  async function loadBackendViewData(payload: MyDataPayload, nextInput: PensionInput) {
+  async function loadBackendViewData(payload: MyDataPayload, nextInput: PensionInput, nextRetireAge = retireAge) {
     const request = {
       customer_id: "FIGMA-MAKE-MVP",
       mydata_raw: payload,
     };
 
-    const [status, questions, dashboard] = await Promise.allSettled([
-      fetchStatusCheck(request),
+    const [questions, dashboard] = await Promise.allSettled([
       fetchCustomQuestions(request),
       fetchResultDashboard({
         ...request,
-        retirement_age: 60,
+        retirement_age: nextRetireAge,
         target_monthly_expense: nextInput.targetMonthlyCost,
       }),
     ]);
 
-    setStatusCheck(status.status === "fulfilled" ? status.value : null);
     setCustomQuestions(
       questions.status === "fulfilled"
         ? questions.value.questions.slice(0, 3)
@@ -92,17 +88,45 @@ function App() {
     setResultDashboard(dashboard.status === "fulfilled" ? dashboard.value : null);
   }
 
+  async function handleSnapshotNext(values: { livingCostManwon: number; retireAge: number }) {
+    const targetMonthlyCost = values.livingCostManwon * 10_000;
+    const nextInput = {
+      ...input,
+      targetMonthlyCost,
+      currentMonthlyLivingCost: targetMonthlyCost,
+    };
+
+    setInput(nextInput);
+    setRetireAge(values.retireAge);
+    setScreen("questions");
+
+    if (mydata) {
+      try {
+        const dashboard = await fetchResultDashboard({
+          customer_id: "FIGMA-MAKE-MVP",
+          mydata_raw: mydata,
+          retirement_age: values.retireAge,
+          target_monthly_expense: targetMonthlyCost,
+        });
+        setResultDashboard(dashboard);
+      } catch {
+        setResultDashboard(null);
+      }
+    }
+  }
+
   async function completeConsent() {
     try {
       const payload = await fetchPersona("PA-0001");
       const nextInput = pensionInputFromMyData(payload);
+      const nextRetireAge = 60;
       setMydata(payload);
       setInput(nextInput);
+      setRetireAge(nextRetireAge);
       setScreen("snapshot");
-      void loadBackendViewData(payload, nextInput);
+      void loadBackendViewData(payload, nextInput, nextRetireAge);
     } catch {
       setMydata(undefined);
-      setStatusCheck(null);
       setCustomQuestions(null);
       setResultDashboard(null);
       setScreen("snapshot");
@@ -114,7 +138,7 @@ function App() {
     try {
       const data = await fetchAiDiagnosis(
         input,
-        { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: 65 },
+        { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: retireAge },
         mydata,
       );
       setAiResult(data);
@@ -123,163 +147,156 @@ function App() {
     }
   }
 
-  if (screen === "onboarding") {
-    return <Onboarding onNext={() => setScreen("consent")} />;
-  }
-
-  if (screen === "consent") {
-    return <DataConsent onNext={completeConsent} />;
-  }
-
-  if (screen === "snapshot") {
-    return <Snapshot status={statusCheck} onNext={() => setScreen("questions")} />;
-  }
-
-  if (screen === "questions") {
-    return <Questions questions={customQuestions} onNext={analyzePension} />;
-  }
-
-  if (screen === "dashboard") {
-    return (
-      <Dashboard
-        dashboard={resultDashboard}
-        actions={aiResult?.action_items}
-        onNext={() => setScreen("report")}
-      />
-    );
-  }
-
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <button
-          className="brand"
-          onClick={() => setScreen("onboarding")}
-          aria-label="처음으로"
+    <div
+      className="flex items-center justify-center min-h-screen"
+      style={{ background: '#E8EEF7' }}
+    >
+      <div
+        className="relative flex flex-col"
+        style={{
+          width: '100%',
+          maxWidth: '390px',
+          height: '100vh',
+          maxHeight: '844px',
+          background: 'white',
+          overflow: 'hidden',
+          boxShadow: '0 24px 80px rgba(13,43,107,0.25)',
+          borderRadius: '40px',
+        }}
+      >
+        {/* Status bar simulation */}
+        <div
+          className="flex-none flex items-center justify-between px-6"
+          style={{ height: '44px', background: 'white', zIndex: 10 }}
         >
-          <span className="brand-mark">든</span>
-          <span>든든내일</span>
-        </button>
-        <div className="topbar-label">{SCREEN_LABELS[screen]}</div>
-        <button className="icon-button" aria-label="도움말">?</button>
-      </header>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: '#1F2937' }}>9:41</span>
+          <div className="flex items-center gap-1.5">
+            <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+              <rect x="0" y="4" width="3" height="8" rx="0.5" fill="#1F2937"/>
+              <rect x="4.5" y="2.5" width="3" height="9.5" rx="0.5" fill="#1F2937"/>
+              <rect x="9" y="0.5" width="3" height="11.5" rx="0.5" fill="#1F2937"/>
+              <rect x="13.5" y="0" width="2.5" height="12" rx="0.5" fill="#1F2937" opacity="0.3"/>
+            </svg>
+            <svg width="15" height="12" viewBox="0 0 15 12" fill="none">
+              <path d="M7.5 2 C4.5 2 2 4.5 0.5 7 L2.5 9 C3.5 7.5 5.5 6 7.5 6 C9.5 6 11.5 7.5 12.5 9 L14.5 7 C13 4.5 10.5 2 7.5 2 Z" fill="#1F2937"/>
+              <path d="M7.5 6 C5.5 6 4 7.5 3 9 L5 11 C5.8 10 6.6 9 7.5 9 C8.4 9 9.2 10 10 11 L12 9 C11 7.5 9.5 6 7.5 6 Z" fill="#1F2937"/>
+              <circle cx="7.5" cy="11" r="1" fill="#1F2937"/>
+            </svg>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <div style={{ width: '22px', height: '12px', borderRadius: '3px', border: '1.5px solid #1F2937', display: 'flex', alignItems: 'center', padding: '1.5px', gap: '1px' }}>
+                <div style={{ flex: 1, background: '#1F2937', borderRadius: '1px', height: '100%' }}/>
+                <div style={{ flex: 1, background: '#1F2937', borderRadius: '1px', height: '100%' }}/>
+                <div style={{ flex: 1, background: '#1F2937', borderRadius: '1px', height: '100%', opacity: 0.4 }}/>
+              </div>
+            </div>
+          </div>
+        </div>
 
-      <div className="progress-track" aria-label="진행률">
-        <div className="progress-value" style={{ width: `${(progress / 7) * 100}%` }} />
+        {/* Screen content */}
+        <div className="flex-1 overflow-hidden relative">
+          {screen === 'onboarding' && (
+            <Onboarding onNext={() => navigate('consent')} />
+          )}
+          {screen === 'consent' && (
+            <DataConsent onNext={completeConsent} />
+          )}
+          {screen === 'snapshot' && (
+            <Snapshot onNext={handleSnapshotNext} />
+          )}
+          {screen === 'questions' && (
+            <Questions questions={customQuestions} onNext={analyzePension} />
+          )}
+          {screen === 'analyzing' && (
+            <Analyzing onNext={() => navigate('report')} />
+          )}
+          {screen === 'report' && (
+            <Report onNext={() => navigate('dashboard')} onBack={() => navigate('analyzing')} />
+          )}
+          {screen === 'dashboard' && (
+            <Dashboard
+              dashboard={resultDashboard}
+              actions={aiResult?.action_items}
+              onNext={() => navigate('actions')}
+            />
+          )}
+          {screen === 'actions' && (
+            <Actions onBack={() => navigate('dashboard')} />
+          )}
+        </div>
+
+        {/* Bottom nav (shown from dashboard onwards) */}
+        {['dashboard', 'report', 'actions'].includes(screen) && (
+          <div
+            className="flex-none flex items-center border-t"
+            style={{ borderColor: '#E5E7EB', height: '56px', background: 'white' }}
+          >
+            {[
+              { id: 'report' as Screen, label: '분석 결과', icon: (
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <rect x="3" y="2" width="14" height="16" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                  <path d="M6 7 L14 7 M6 10 L14 10 M6 13 L10 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              )},
+              { id: 'dashboard' as Screen, label: '수령 시뮬레이션', icon: (
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <rect x="2" y="2" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+                  <rect x="11" y="2" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+                  <rect x="2" y="11" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+                  <rect x="11" y="11" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+                </svg>
+              )},
+              { id: 'actions' as Screen, label: '추천 행동', icon: (
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <path d="M10 2 L12.5 7.5 L18 8.5 L14 12.5 L15 18 L10 15 L5 18 L6 12.5 L2 8.5 L7.5 7.5 Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                </svg>
+              )},
+            ].map((tab) => {
+              const active = screen === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => navigate(tab.id)}
+                  className="flex-1 flex flex-col items-center justify-center gap-0.5 h-full"
+                  style={{ color: active ? '#2A7BD6' : '#9CA3AF' }}
+                >
+                  {tab.icon}
+                  <span style={{ fontSize: '10px', fontWeight: active ? 700 : 400 }}>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Home indicator */}
+        <div className="flex-none flex items-center justify-center" style={{ height: '20px', background: 'white' }}>
+          <div className="w-28 h-1 rounded-full" style={{ background: '#E5E7EB' }}/>
+        </div>
       </div>
 
-      {screen === "analyzing" && <Analyzing onNext={() => setScreen("dashboard")} />}
-      {screen === "report" && (
-        <ReportScreen
-          input={input}
-          result={result}
-          aiResult={aiResult}
-          onBack={() => setScreen("dashboard")}
-          onNext={() => setScreen("actions")}
-        />
-      )}
-      {screen === "actions" && (
-        <ActionsScreen
-          aiResult={aiResult}
-          shortage={result.shortageAmount}
-          onBack={() => setScreen("report")}
-          onRestart={() => setScreen("onboarding")}
-        />
-      )}
-    </div>
-  );
-}
-
-function ReportScreen({
-  input,
-  result,
-  aiResult,
-  onBack,
-  onNext,
-}: {
-  input: PensionInput;
-  result: ReturnType<typeof diagnose>;
-  aiResult: AnalyzeResponse | null;
-  onBack: () => void;
-  onNext: () => void;
-}) {
-  const pensionItems = [
-    ["국민연금", input.nationalPension, "var(--green)"],
-    ["퇴직연금", input.retirementPension, "#64b28d"],
-    ["개인연금", input.privatePension, "#b8d8c8"],
-  ] as const;
-  return (
-    <main className="page report-page">
-      <span className="eyebrow">DETAILED REPORT</span>
-      <h1>내 연금의 빈틈을<br />차근차근 살펴봤어요</h1>
-      <section className="report-section">
-        <div className="section-title"><span>01</span><div><h2>예상 연금 구성</h2><p>매월 들어오는 연금의 구성입니다.</p></div></div>
-        <div className="stacked-bar">
-          {pensionItems.map(([name, value, color]) => (
-            <i key={name} style={{ width: `${(value / result.totalMonthlyPension) * 100}%`, background: color }} />
-          ))}
-        </div>
-        <div className="legend">
-          {pensionItems.map(([name, value, color]) => (
-            <div key={name}><span style={{ background: color }} /><p>{name}<b>{formatKRW(value)}</b></p></div>
-          ))}
-        </div>
-      </section>
-      <section className="report-section">
-        <div className="section-title"><span>02</span><div><h2>목표 대비 부족률</h2><p>목표 생활비와 예상 연금을 비교했어요.</p></div></div>
-        <div className="gap-visual">
-          <div><span>목표 생활비</span><b>{formatKRW(result.targetMonthlyCost)}</b></div>
-          <div><span>예상 연금</span><b>{formatKRW(result.totalMonthlyPension)}</b></div>
-          <div className="gap-result"><span>부족률</span><strong>{formatPercent(result.shortageRate)}</strong></div>
-        </div>
-      </section>
-      {aiResult?.rationale && <section className="ai-rationale"><span>AI 분석 근거</span><p>{aiResult.rationale}</p></section>}
-      <div className="button-row">
-        <button className="secondary-button" onClick={onBack}>이전</button>
-        <button className="primary-button" onClick={onNext}>실행 계획 확인 →</button>
-      </div>
-    </main>
-  );
-}
-
-function ActionsScreen({
-  aiResult,
-  shortage,
-  onBack,
-  onRestart,
-}: {
-  aiResult: AnalyzeResponse | null;
-  shortage: number;
-  onBack: () => void;
-  onRestart: () => void;
-}) {
-  const actions = aiResult?.action_items?.length
-    ? aiResult.action_items
-    : [
-        `매월 ${formatKRW(Math.max(100000, Math.round(shortage * 0.3)))} 추가 저축 가능 여부 확인하기`,
-        "퇴직연금 수익률과 수수료를 한 번 비교해 보기",
-        "국민연금 예상 수령액과 수령 시기 다시 확인하기",
-      ];
-  return (
-    <main className="page action-page">
-      <span className="eyebrow">YOUR ACTION PLAN</span>
-      <h1>오늘 할 수 있는 것부터<br />하나씩 시작해요</h1>
-      <p className="lead">무리하지 않아도 괜찮아요. 가장 쉬운 행동 하나가 든든한 내일을 만듭니다.</p>
-      <div className="action-list">
-        {actions.slice(0, 3).map((action, index) => (
-          <article key={action}>
-            <span>{String(index + 1).padStart(2, "0")}</span>
-            <div><small>{index === 0 ? "이번 주" : index === 1 ? "이번 달" : "3개월 안에"}</small><h2>{action}</h2></div>
-            <button aria-label="완료 표시">✓</button>
-          </article>
+      {/* Screen selector pills (for prototype navigation) */}
+      <div
+        className="fixed bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-2 rounded-full flex-wrap"
+        style={{ background: 'rgba(13,43,107,0.85)', backdropFilter: 'blur(8px)', zIndex: 100, maxWidth: '95vw', justifyContent: 'center' }}
+      >
+        {(Object.keys(screenLabels) as Screen[]).map((s) => (
+          <button
+            key={s}
+            onClick={() => navigate(s)}
+            className="rounded-full px-2.5 py-1 transition-all"
+            style={{
+              background: screen === s ? 'white' : 'transparent',
+              color: screen === s ? '#0D2B6B' : 'rgba(255,255,255,0.7)',
+              fontSize: '10px',
+              fontWeight: screen === s ? 700 : 400,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {screenLabels[s]}
+          </button>
         ))}
       </div>
-      <section className="finish-card"><span>든든내일</span><h2>연금 진단을 완료했어요</h2><p>정보가 바뀌면 언제든 다시 확인해 보세요.</p></section>
-      <div className="button-row">
-        <button className="secondary-button" onClick={onBack}>리포트 다시 보기</button>
-        <button className="primary-button" onClick={onRestart}>처음으로</button>
-      </div>
-    </main>
+    </div>
   );
 }
 

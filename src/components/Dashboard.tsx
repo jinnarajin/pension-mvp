@@ -1,7 +1,5 @@
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ResponsiveContainer,
-} from 'recharts';
+// v3 - 수령방식 탭 + 공백구간 음영 + 부족시점 마커
+import { useState } from 'react';
 import type { ResultDashboardResponse } from '../services/pensionAiAgent';
 
 interface Props {
@@ -10,124 +8,217 @@ interface Props {
   actions?: string[];
 }
 
-const fallbackDashboard: ResultDashboardResponse = {
-  customer_id: 'fallback',
-  summary_cards: {
-    expected_monthly_pension: 870_000,
-    expected_monthly_pension_start_age: 65,
-    monthly_living_expense: 2_300_000,
-    stable_maintenance_years: 18,
-    stable_maintenance_from_age: 60,
-    stable_maintenance_to_age: 78,
-    shortage_expected_age: 78,
-    shortage_expected_month: '2048-01',
-  },
-  asset_projection: {
-    unit: 'KRW',
-    unit_display: '만원',
-    start_age: 57,
-    retirement_age: 60,
-    life_expectancy_age: 85,
-    points: [
-      { age: 60, year_month: '2030-01', asset_balance: 234_000_000, asset_balance_manwon: 23400, is_shortage_point: false },
-      { age: 63, year_month: '2033-01', asset_balance: 262_000_000, asset_balance_manwon: 26200, is_shortage_point: false },
-      { age: 65, year_month: '2035-01', asset_balance: 275_000_000, asset_balance_manwon: 27500, is_shortage_point: false },
-      { age: 68, year_month: '2038-01', asset_balance: 248_000_000, asset_balance_manwon: 24800, is_shortage_point: false },
-      { age: 70, year_month: '2040-01', asset_balance: 210_000_000, asset_balance_manwon: 21000, is_shortage_point: false },
-      { age: 73, year_month: '2043-01', asset_balance: 145_000_000, asset_balance_manwon: 14500, is_shortage_point: false },
-      { age: 75, year_month: '2045-01', asset_balance: 92_000_000, asset_balance_manwon: 9200, is_shortage_point: false },
-      { age: 78, year_month: '2048-01', asset_balance: 18_000_000, asset_balance_manwon: 1800, is_shortage_point: true },
-      { age: 80, year_month: '2050-01', asset_balance: -35_000_000, asset_balance_manwon: -3500, is_shortage_point: false },
-      { age: 85, year_month: '2055-01', asset_balance: -120_000_000, asset_balance_manwon: -12000, is_shortage_point: false },
-    ],
-  },
-  simulation_assumptions: {},
-  source_features: {},
-  source_profile: {},
-  birth_month: '',
+type Method = 'lumpsum' | 'ten' | 'twenty';
+
+const AGES = [57, 60, 62, 65, 68, 70, 73, 75, 78, 80, 85];
+const EXPENSE = [240, 244, 247, 251, 257, 262, 270, 275, 283, 289, 305];
+
+const PENSION: Record<Method, number[]> = {
+  lumpsum: [0, 0, 0, 87, 87, 87, 85, 83, 80, 77, 68],
+  ten: [0, 0, 34, 121, 121, 121, 87, 85, 82, 79, 70],
+  twenty: [0, 0, 17, 104, 104, 104, 104, 102, 99, 96, 75],
 };
 
-function formatManwonFromWon(value: number) {
-  const manwon = Math.round(value / 10_000);
-  return formatManwon(manwon);
+interface MInfo {
+  label: string;
+  sub: string;
+  peakPension: number;
+  shortageAge: number;
+  insight: string;
 }
 
-function formatManwon(v: number) {
-  const sign = v < 0 ? '-' : '';
-  const abs = Math.abs(v);
-  if (abs >= 10000) {
-    const eok = Math.floor(abs / 10000);
-    const rest = abs % 10000;
-    return rest > 0 ? `${sign}${eok}억 ${rest.toLocaleString('ko-KR')}만원` : `${sign}${eok}억원`;
-  }
-  return `${sign}${abs.toLocaleString('ko-KR')}만원`;
-}
-
-function formatMonthly(value: number) {
-  return `${formatManwonFromWon(value).replace('만원', '')}만원`;
-}
-
-function fmtAmt(v: number) {
-  if (v >= 10000) return `${(v / 10000).toFixed(0)}억`;
-  if (v >= 1000) return `${(v / 1000).toFixed(1)}천`;
-  if (v <= -10000) return `-${(Math.abs(v) / 10000).toFixed(0)}억`;
-  return `${v}`;
-}
-
-const CustomDot = (props: any) => {
-  const { cx, cy, payload } = props;
-  if (payload.isShortagePoint) {
-    return (
-      <g>
-        <circle cx={cx} cy={cy} r={7} fill="#F59E0B" stroke="white" strokeWidth={2}/>
-      </g>
-    );
-  }
-  return null;
+const MINFO: Record<Method, MInfo> = {
+  lumpsum: {
+    label: '일시금',
+    sub: '퇴직급여 일시 수령',
+    peakPension: 87,
+    shortageAge: 74,
+    insight: '초기에 목돈이 생기지만 월 연금이 87만원에 그쳐 74세부터 자산이 빠르게 줄어요. 투자 수익 계획이 함께 필요해요.',
+  },
+  ten: {
+    label: '10년 수령',
+    sub: '월 34만원 x 10년',
+    peakPension: 121,
+    shortageAge: 78,
+    insight: '60~65세 소득 공백을 줄이고, 72세까지 퇴직연금이 함께 들어와 세 방식 중 가장 균형 잡혀 있어요.',
+  },
+  twenty: {
+    label: '20년 수령',
+    sub: '월 17만원 x 20년',
+    peakPension: 104,
+    shortageAge: 80,
+    insight: '월 수령액은 작지만 82세까지 퇴직연금이 지속돼 자산 소진 속도를 늦출 수 있어요.',
+  },
 };
 
-const CustomTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length) {
-    const v = payload[0].value;
-    const age = payload[0].payload.age;
-    return (
-      <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: '10px', padding: '8px 12px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-        <p style={{ fontSize: '12px', color: '#6B7280' }}>{age}세</p>
-        <p style={{ fontSize: '14px', fontWeight: 700, color: v >= 0 ? '#2A7BD6' : '#EF4444' }}>
-          {v >= 0 ? '' : '-'}{fmtAmt(Math.abs(v))}만원
-        </p>
+const W = 310;
+const H = 200;
+const PL = 38;
+const PR = 10;
+const PT = 22;
+const PB = 26;
+const CW = W - PL - PR;
+const CH = H - PT - PB;
+const AMIN = 57;
+const AMAX = 85;
+const VMAX = 330;
+
+const xs = (a: number) => PL + ((a - AMIN) / (AMAX - AMIN)) * CW;
+const ys = (v: number) => PT + CH - (v / VMAX) * CH;
+
+const mkPath = (vals: number[]) =>
+  AGES.map((a, i) => `${i === 0 ? 'M' : 'L'}${xs(a).toFixed(1)} ${ys(vals[i]).toFixed(1)}`).join(' ');
+
+function Tabs({ sel, onChange }: { sel: Method; onChange: (m: Method) => void }) {
+  const items: { id: Method; label: string; sub: string }[] = [
+    { id: 'lumpsum', label: '일시금', sub: MINFO.lumpsum.sub },
+    { id: 'ten', label: '10년 수령', sub: MINFO.ten.sub },
+    { id: 'twenty', label: '20년 수령', sub: MINFO.twenty.sub },
+  ];
+
+  return (
+    <div>
+      <div className="flex gap-1 p-1 rounded-2xl" style={{ background: '#F3F4F6' }}>
+        {items.map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => onChange(id)}
+            className="flex-1 rounded-xl py-2.5 transition-all"
+            style={{
+              background: sel === id ? 'white' : 'transparent',
+              color: sel === id ? '#0D2B6B' : '#6B7280',
+              fontSize: 13,
+              fontWeight: sel === id ? 700 : 400,
+              boxShadow: sel === id ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
+            }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
-    );
-  }
-  return null;
-};
+      <p style={{ fontSize: 12, color: '#9CA3AF', marginTop: 6, textAlign: 'center' }}>
+        {MINFO[sel].sub}
+      </p>
+    </div>
+  );
+}
 
-export function Dashboard({ onNext, dashboard, actions }: Props) {
-  const data = dashboard ?? fallbackDashboard;
-  const cards = data.summary_cards;
-  const shortageAge = cards.shortage_expected_age ?? cards.stable_maintenance_to_age ?? 78;
-  const stableFrom = cards.stable_maintenance_from_age;
-  const stableTo = cards.stable_maintenance_to_age ?? shortageAge;
-  const stableYears = cards.stable_maintenance_years ?? Math.max(0, stableTo - stableFrom);
-  const chartData = data.asset_projection.points.map((point) => ({
-    age: Math.round(point.age),
-    value: point.asset_balance_manwon,
-    isShortagePoint: point.is_shortage_point || Math.round(point.age) === shortageAge,
-  }));
-  const actionItems = actions?.length
-    ? actions.slice(0, 2).map((action, index) => ({
-        label: action,
-        desc: index === 0 ? 'AI 분석 결과 기반 우선 실행 항목이에요.' : '현재 현금흐름을 기준으로 점검이 필요해요.',
-        badge: index === 0 ? '추천' : '확인 필요',
-      }))
-    : [
-        { label: '연금저축·IRP 추가 납입', desc: '월 20만원 추가 시 안정 기간 3년 연장', badge: '추천' },
-        { label: '65세 국민연금 조기 수령 검토', desc: '5년 앞당기면 월 수령액 감소 효과 확인 필요', badge: '확인 필요' },
-      ];
+function Chart({ pension, shortageAge }: { pension: number[]; shortageAge: number }) {
+  const [tipIdx, setTipIdx] = useState<number | null>(null);
+
+  function onMove(e: React.MouseEvent<SVGSVGElement>) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const mx = (e.clientX - r.left) * (W / r.width);
+    const approx = AMIN + ((mx - PL) / CW) * (AMAX - AMIN);
+    let best = 0;
+    let bestD = Infinity;
+    AGES.forEach((a, i) => {
+      const d = Math.abs(a - approx);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    setTipIdx(best);
+  }
+
+  const pensionPath = mkPath(pension);
+  const expensePath = mkPath(EXPENSE);
+  const gapFwd = AGES.map((a, i) => `${i === 0 ? 'M' : 'L'}${xs(a).toFixed(1)} ${ys(pension[i]).toFixed(1)}`);
+  const gapBwd = [...AGES].reverse().map((a, ri) => `L${xs(a).toFixed(1)} ${ys(EXPENSE[AGES.length - 1 - ri]).toFixed(1)}`);
+  const gapPath = [...gapFwd, ...gapBwd, 'Z'].join(' ');
+
+  const sx = xs(shortageAge);
+  const yTicks = [0, 60, 120, 180, 240, 300];
+  const xTicks = [57, 65, 70, 78, 85];
+  const tx = tipIdx !== null ? xs(AGES[tipIdx]) : null;
+  const tP = tipIdx !== null ? pension[tipIdx] : null;
+  const tE = tipIdx !== null ? EXPENSE[tipIdx] : null;
+  const tA = tipIdx !== null ? AGES[tipIdx] : null;
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg
+        width="100%"
+        viewBox={`0 0 ${W} ${H}`}
+        onMouseMove={onMove}
+        onMouseLeave={() => setTipIdx(null)}
+        style={{ display: 'block', cursor: 'crosshair' }}
+      >
+        {yTicks.map((v) => (
+          <g key={v}>
+            <line x1={PL} x2={W - PR} y1={ys(v)} y2={ys(v)} stroke="#F3F4F6" strokeWidth={1} />
+            <text x={PL - 4} y={ys(v) + 4} textAnchor="end" fontSize={10} fill="#C4C9D4">{v}</text>
+          </g>
+        ))}
+
+        <rect x={sx} y={PT} width={Math.max(0, xs(AMAX) - sx)} height={CH} fill="rgba(245,158,11,0.07)" />
+        <path d={gapPath} fill="rgba(245,158,11,0.05)" />
+        <line x1={sx} x2={sx} y1={PT} y2={PT + CH} stroke="#D97706" strokeWidth={1.5} strokeDasharray="4 3" />
+
+        <path d={expensePath} stroke="#F59E0B" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        <path d={pensionPath} stroke="#2A7BD6" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+
+        <rect x={sx + 3} y={PT - 2} width={46} height={15} rx={4} fill="rgba(215,119,6,0.12)" />
+        <text x={sx + 6} y={PT + 9} fontSize={9} fill="#D97706" fontWeight="600">
+          {shortageAge}세 부족↑
+        </text>
+
+        {tx !== null && (
+          <>
+            <line x1={tx} x2={tx} y1={PT} y2={PT + CH} stroke="#9CA3AF" strokeWidth={1} strokeDasharray="3 2" />
+            <circle cx={tx} cy={ys(tP!)} r={5} fill="#2A7BD6" stroke="white" strokeWidth={2} />
+            <circle cx={tx} cy={ys(tE!)} r={5} fill="#F59E0B" stroke="white" strokeWidth={2} />
+          </>
+        )}
+
+        {xTicks.map((a) => (
+          <text key={a} x={xs(a)} y={H - 6} textAnchor="middle" fontSize={10} fill="#C4C9D4">{a}세</text>
+        ))}
+      </svg>
+
+      {tx !== null && tA !== null && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 26,
+            left: tx > W * 0.55 ? 'auto' : `${(tx / W) * 100 + 2}%`,
+            right: tx > W * 0.55 ? `${((W - tx) / W) * 100 + 2}%` : 'auto',
+            background: 'white',
+            border: '1px solid #E5E7EB',
+            borderRadius: 12,
+            padding: '8px 12px',
+            boxShadow: '0 6px 20px rgba(0,0,0,0.10)',
+            pointerEvents: 'none',
+            minWidth: 118,
+            zIndex: 10,
+          }}
+        >
+          <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 5, fontWeight: 600 }}>{tA}세</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#2A7BD6', flexShrink: 0, display: 'inline-block' }} />
+            <span style={{ fontSize: 13, color: '#1F2937' }}>연금 <b>{tP}만원</b></span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#F59E0B', flexShrink: 0, display: 'inline-block' }} />
+            <span style={{ fontSize: 13, color: '#1F2937' }}>지출 <b>{tE}만원</b></span>
+          </div>
+          <div style={{ borderTop: '1px solid #F3F4F6', paddingTop: 5 }}>
+            <span style={{ fontSize: 12, color: '#D97706', fontWeight: 700 }}>월 {tE! - tP!}만원 부족</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Dashboard({ onNext }: Props) {
+  const [method, setMethod] = useState<Method>('ten');
+  const info = MINFO[method];
+  const pension = PENSION[method];
 
   return (
     <div className="h-full overflow-y-auto bg-white">
-      {/* Top summary */}
       <div
         className="px-6 pt-12 pb-6"
         style={{ background: 'linear-gradient(160deg, #0D2B6B 0%, #1a4499 100%)' }}
@@ -135,163 +226,214 @@ export function Dashboard({ onNext, dashboard, actions }: Props) {
         <div className="flex items-center gap-2 mb-4">
           <span
             className="rounded-full px-3 py-1"
-            style={{ background: 'rgba(55,194,123,0.2)', color: '#37C27B', fontSize: '13px', fontWeight: 600 }}
+            style={{ background: 'rgba(55,194,123,0.2)', color: '#37C27B', fontSize: 13, fontWeight: 600 }}
           >
-            안정 구간 확인
+            분석 완료
           </span>
         </div>
-        <h2 style={{ fontSize: '21px', fontWeight: 700, color: '#FFFFFF', lineHeight: '150%', marginBottom: '4px' }}>
+        <h2 style={{ fontSize: 21, fontWeight: 700, color: '#FFF', lineHeight: '150%', marginBottom: 4 }}>
           현재 계획대로라면<br />
-          <span style={{ color: '#37C27B' }}>{stableTo}세까지 안정적으로</span> 생활할 수 있어요.
+          <span style={{ color: '#37C27B' }}>{info.shortageAge}세까지 안정적으로</span> 생활할 수 있어요.
         </h2>
-        <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', marginTop: '6px' }}>
-          조금 더 준비하면 {Math.round(data.asset_projection.life_expectancy_age)}세까지 늘릴 수 있어요.
+        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.65)', marginTop: 6 }}>
+          수령방식을 바꾸면 안정 기간이 달라져요.
         </p>
       </div>
 
-      <div className="px-6 py-5 space-y-5">
-        {/* Key metrics */}
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { label: '예상 월 연금', value: formatMonthly(cards.expected_monthly_pension), note: `${cards.expected_monthly_pension_start_age}세 수령 시`, color: '#2A7BD6' },
-            { label: '예상 월 생활비', value: formatMonthly(cards.monthly_living_expense), note: '현재 지출 기준', color: '#1F2937' },
-            { label: '안정 유지 기간', value: `${stableYears}년`, note: `${stableFrom}→${stableTo}세`, color: '#37C27B' },
-            { label: '부족 예상 시점', value: `${shortageAge}세`, note: '현재 계획 기준', color: '#D97706' },
-          ].map((m) => (
-            <div
-              key={m.label}
-              className="p-4 rounded-2xl"
-              style={{ border: '1px solid #E5E7EB' }}
-            >
-              <p style={{ fontSize: '12px', color: '#6B7280', marginBottom: '6px' }}>{m.label}</p>
-              <p style={{ fontSize: '22px', fontWeight: 700, color: m.color, letterSpacing: '-0.5px' }}>{m.value}</p>
-              <p style={{ fontSize: '12px', color: '#9CA3AF', marginTop: '2px' }}>{m.note}</p>
+      <div className="px-6 pt-5 pb-4 space-y-4">
+        <div className="p-5 rounded-2xl" style={{ border: '1px solid #E5E7EB' }}>
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M8 1.5 L14 4.5 L14 7.5 C14 11 11 13.5 8 14.5 C5 13.5 2 11 2 7.5 L2 4.5 Z"
+                  stroke="#0D2B6B"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+                <path d="M5.5 8 L7.5 10 L10.5 6" stroke="#37C27B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <p style={{ fontSize: 14, fontWeight: 700, color: '#1F2937' }}>현재 자산 현황</p>
             </div>
-          ))}
+            <span
+              className="rounded-full px-2.5 py-0.5"
+              style={{ background: '#EBF2FC', color: '#0D2B6B', fontSize: 11, fontWeight: 600 }}
+            >
+              마이데이터 연동
+            </span>
+          </div>
+          <div className="flex items-baseline gap-1.5 mt-3 mb-4">
+            <span style={{ fontSize: 30, fontWeight: 800, color: '#0D2B6B', letterSpacing: '-1.5px', lineHeight: 1 }}>2억 3,400</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: '#4B6FAD' }}>만원</span>
+            <span style={{ fontSize: 12, color: '#9CA3AF', marginLeft: 2 }}>총 금융자산</span>
+          </div>
+
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#37C27B' }}>현금성 자산 · 즉시 사용 가능</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#1F2937' }}>7,000만원</span>
+            </div>
+            <div className="space-y-1.5">
+              {[
+                { label: 'CMA·보통예금', amt: 4800, pct: 69, color: '#37C27B' },
+                { label: '공모펀드', amt: 2200, pct: 31, color: '#A5B4FC' },
+              ].map((item) => (
+                <div key={item.label}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: item.color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: '#374151' }}>{item.label}</span>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>{item.amt.toLocaleString()}만원</span>
+                  </div>
+                  <div style={{ height: 4, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}>
+                    <div style={{ width: `${item.pct}%`, height: '100%', background: item.color, borderRadius: 99 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#6B7280' }}>비유동·투자자산 · 처분 시간 필요</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#1F2937' }}>1억 6,400만원</span>
+            </div>
+            <div className="space-y-1.5">
+              {[
+                { label: '주식·ETF', amt: 7200, pct: 44, color: '#2A7BD6' },
+                { label: '정기예금', amt: 5800, pct: 35, color: '#D1D5DB' },
+                { label: '적금', amt: 3400, pct: 21, color: '#E5E7EB' },
+              ].map((item) => (
+                <div key={item.label}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: item.color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: '#6B7280' }}>{item.label}</span>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#6B7280' }}>{item.amt.toLocaleString()}만원</span>
+                  </div>
+                  <div style={{ height: 4, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}>
+                    <div style={{ width: `${item.pct}%`, height: '100%', background: item.color, borderRadius: 99 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2.5 p-3 rounded-xl" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0, marginTop: 1 }}>
+              <circle cx="7" cy="7" r="6" stroke="#6B7280" strokeWidth="1.2" />
+              <path d="M7 4.5 L7 7" stroke="#6B7280" strokeWidth="1.5" strokeLinecap="round" />
+              <circle cx="7" cy="9.5" r="0.8" fill="#6B7280" />
+            </svg>
+            <p style={{ fontSize: 12, color: '#6B7280', lineHeight: '150%' }}>
+              현금성 자산(7,000만원)으로 월 부족분을 충당하면<br />
+              <b style={{ color: '#D97706' }}>약 5년(62세 전후)</b>에 소진될 것으로 예상돼요.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 20,
+          background: 'white',
+          borderTop: '1px solid #E5E7EB',
+          borderBottom: '1px solid #E5E7EB',
+          padding: '12px 24px',
+        }}
+      >
+        <p style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', marginBottom: 8 }}>
+          퇴직급여 수령방식을 선택하면 아래 분석이 바뀌어요
+        </p>
+        <Tabs sel={method} onChange={setMethod} />
+      </div>
+
+      <div className="px-6 py-5 space-y-5">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="p-4 rounded-2xl" style={{ border: '1px solid #E5E7EB' }}>
+            <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>예상 월 연금 (65세~)</p>
+            <p style={{ fontSize: 22, fontWeight: 700, color: '#2A7BD6', letterSpacing: '-0.5px' }}>
+              {info.peakPension}만원
+            </p>
+            <p style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>{info.sub}</p>
+          </div>
+          <div className="p-4 rounded-2xl" style={{ border: '1px solid #E5E7EB' }}>
+            <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>최초 부족 예상 시점</p>
+            <p style={{ fontSize: 22, fontWeight: 700, color: '#D97706', letterSpacing: '-0.5px' }}>
+              {info.shortageAge}세
+            </p>
+            <p style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>현재 계획 기준</p>
+          </div>
         </div>
 
-        {/* Chart */}
         <div className="p-4 rounded-2xl" style={{ border: '1px solid #E5E7EB' }}>
           <div className="flex items-center justify-between mb-1">
-            <p style={{ fontSize: '14px', fontWeight: 600, color: '#1F2937' }}>연령별 자산 변화</p>
-            <span style={{ fontSize: '12px', color: '#6B7280' }}>단위: 만원</span>
+            <p style={{ fontSize: 14, fontWeight: 700, color: '#1F2937' }}>연금 수령액 vs 월 지출</p>
+            <span style={{ fontSize: 11, color: '#9CA3AF' }}>만원/월</span>
           </div>
-          <div className="flex items-center gap-3 mb-3">
-            <div className="flex items-center gap-1">
-              <div className="w-3 h-0.5 rounded" style={{ background: '#2A7BD6' }}/>
-              <span style={{ fontSize: '11px', color: '#6B7280' }}>자산 잔액</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <div className="w-2.5 h-2.5 rounded-full" style={{ background: '#F59E0B' }}/>
-              <span style={{ fontSize: '11px', color: '#6B7280' }}>부족 예상 시점 ({shortageAge}세)</span>
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={160}>
-            <LineChart data={chartData} margin={{ top: 5, right: 8, bottom: 0, left: -20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false}/>
-              <XAxis
-                dataKey="age"
-                tickFormatter={(v) => `${v}세`}
-                tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                tickFormatter={fmtAmt}
-                tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <Tooltip content={<CustomTooltip />}/>
-              <ReferenceLine y={0} stroke="#E5E7EB" strokeWidth={1.5} strokeDasharray="4 4"/>
-              <Line
-                type="monotone"
-                dataKey="value"
-                stroke="#2A7BD6"
-                strokeWidth={2.5}
-                dot={<CustomDot />}
-                activeDot={{ r: 5, fill: '#2A7BD6', stroke: 'white', strokeWidth: 2 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-          <p className="mt-2 text-center" style={{ fontSize: '11px', color: '#D97706' }}>
-            ● {shortageAge}세 이후 생활비가 자산을 초과할 수 있어요.
+          <p style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 8 }}>
+            주황 음영 구간이 자산 부족이 시작되는 시점이에요.
           </p>
+
+          <Chart pension={pension} shortageAge={info.shortageAge} />
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 px-1">
+            {[
+              { color: '#2A7BD6', label: '월 연금 수령액' },
+              { color: '#F59E0B', label: '생활비 + 의료비' },
+            ].map((l) => (
+              <div key={l.label} className="flex items-center gap-1.5">
+                <div style={{ width: 16, height: 3, background: l.color, borderRadius: 2 }} />
+                <span style={{ fontSize: 11, color: '#6B7280' }}>{l.label}</span>
+              </div>
+            ))}
+            <div className="flex items-center gap-1.5">
+              <div style={{ width: 12, height: 3, background: 'rgba(245,158,11,0.4)', borderRadius: 2 }} />
+              <span style={{ fontSize: 11, color: '#D97706' }}>부족 구간</span>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2 mt-3 px-3 py-2.5 rounded-xl" style={{ background: '#FFFBEB' }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0, marginTop: 1 }}>
+              <circle cx="7" cy="7" r="6" stroke="#F59E0B" strokeWidth="1.3" />
+              <path d="M7 4.5 L7 7.5" stroke="#F59E0B" strokeWidth="1.5" strokeLinecap="round" />
+              <circle cx="7" cy="9.5" r="0.8" fill="#F59E0B" />
+            </svg>
+            <p style={{ fontSize: 12, color: '#92400E', lineHeight: '150%' }}>{info.insight}</p>
+          </div>
         </div>
 
-        {/* Key factors */}
         <div>
-          <p style={{ fontSize: '15px', fontWeight: 700, color: '#1F2937', marginBottom: '10px' }}>
-            분석에 영향을 준 주요 요인
-          </p>
+          <p style={{ fontSize: 15, fontWeight: 700, color: '#1F2937', marginBottom: 10 }}>분석에 영향을 준 주요 요인</p>
           <div className="space-y-2">
             {[
-              { icon: '①', text: `공적연금 수령 전 기간(${stableFrom}~${cards.expected_monthly_pension_start_age}세) 소득 공백이 있어요.`, weight: 'high' },
-              { icon: '②', text: '현재 생활비 수준을 유지할 경우 자산 소진이 빨라져요.', weight: 'mid' },
-              { icon: '③', text: '주택 자산은 유동화 가능성을 반영하지 않았어요.', weight: 'low' },
+              { icon: '①', text: '60~65세 연금 공백기 동안 자산 소진이 가장 빠르게 일어나요.' },
+              { icon: '②', text: '의료비가 70세 이후 연평균 5%씩 늘어날 것으로 추정돼요.' },
+              { icon: '③', text: '국민연금(87만원)만으로는 월 지출의 36%만 충당할 수 있어요.' },
             ].map((f) => (
-              <div
-                key={f.icon}
-                className="flex items-start gap-3 p-4 rounded-xl"
-                style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}
-              >
-                <span style={{ fontSize: '14px', fontWeight: 700, color: '#2A7BD6', flexShrink: 0 }}>{f.icon}</span>
-                <p style={{ fontSize: '14px', color: '#374151', lineHeight: '150%' }}>{f.text}</p>
+              <div key={f.icon} className="flex items-start gap-3 p-4 rounded-xl" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: '#2A7BD6', flexShrink: 0 }}>{f.icon}</span>
+                <p style={{ fontSize: 14, color: '#374151', lineHeight: '150%' }}>{f.text}</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Quick actions */}
-        <div>
-          <p style={{ fontSize: '15px', fontWeight: 700, color: '#1F2937', marginBottom: '10px' }}>
-            지금 할 수 있는 준비
-          </p>
-          <div className="space-y-2">
-            {actionItems.map((a) => (
-              <div
-                key={a.label}
-                className="flex items-start gap-3 p-4 rounded-xl"
-                style={{ background: '#EBF2FC', border: '1px solid #BFDBFE' }}
-              >
-                <div
-                  className="flex-none w-5 h-5 rounded-full flex items-center justify-center mt-0.5"
-                  style={{ background: '#2A7BD6' }}
-                >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                    <path d="M2 5 L4.5 7.5 L8 2.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <p style={{ fontSize: '15px', fontWeight: 600, color: '#0D2B6B' }}>{a.label}</p>
-                    <span
-                      className="rounded-full px-2 py-0.5"
-                      style={{ background: '#37C27B', color: 'white', fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap' }}
-                    >
-                      {a.badge}
-                    </span>
-                  </div>
-                  <p style={{ fontSize: '13px', color: '#4B7CBD', marginTop: '3px', lineHeight: '150%' }}>{a.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* CTA */}
         <button
           onClick={onNext}
           className="w-full flex items-center justify-center gap-2 rounded-xl text-white"
-          style={{ background: '#0D2B6B', height: '54px', fontSize: '17px', fontWeight: 700 }}
+          style={{ background: '#0D2B6B', height: 54, fontSize: 17, fontWeight: 700 }}
         >
-          상세 분석 보기
+          지금 할 수 있는 준비 보기
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M6 4 L10 8 L6 12" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M6 4 L10 8 L6 12" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
-
-        <div className="h-4"/>
+        <div className="h-4" />
       </div>
     </div>
   );
