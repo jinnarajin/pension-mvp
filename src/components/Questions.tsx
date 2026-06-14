@@ -1,9 +1,13 @@
 import { useState } from 'react';
-import type { CustomQuestion } from '../services/pensionAiAgent';
+import type { AdaptiveAnswerPayload, CustomQuestion } from '../services/pensionAiAgent';
+import { compactQuestionOptions, type UiOption } from '../services/questionOptions';
 
 interface Props {
-  onNext: () => void;
+  onNext: (answers: AdaptiveAnswerPayload[]) => void;
+  onAnswerChange?: (answers: AdaptiveAnswerPayload[]) => Promise<void>;
   questions?: CustomQuestion[] | null;
+  isLoading?: boolean;
+  selectionMode?: string | null;
 }
 
 const fallbackQuestions = [
@@ -22,61 +26,103 @@ const fallbackQuestions = [
     text: '건강 관련 큰 지출이 예상되시나요?',
     options: ['없음', '약간 예상됨', '상당히 예상됨', '이미 의료비 지출 중'],
   },
+  {
+    question_id: 'fallback-4',
+    text: '은퇴 후에도 일을 통한 소득을 어느 정도 기대하시나요?',
+    options: ['없음', '월 50만원 미만', '월 50~150만원', '월 150만원 이상'],
+  },
+  {
+    question_id: 'fallback-5',
+    text: '퇴직급여를 받을 때 가장 중요하게 보는 기준은 무엇인가요?',
+    options: ['당장 쓸 수 있는 돈', '매달 안정적 현금흐름', '세금 부담 완화', '아직 모르겠어요'],
+  },
 ];
 
 interface UiQuestion {
   id: string;
   text: string;
-  options: string[];
-}
-
-const optionLabels: Record<string, string> = {
-  Completely: '매우 그렇다',
-  'Very well': '그렇다',
-  Somewhat: '보통이다',
-  'Very little': '별로 그렇지 않다',
-  'Not at all': '전혀 그렇지 않다',
-  Always: '항상 그렇다',
-  Often: '자주 그렇다',
-  Sometimes: '가끔 그렇다',
-  Rarely: '거의 그렇지 않다',
-  Never: '전혀 없다',
-};
-
-function localizeOptions(options: string[]) {
-  return options.map((option) => optionLabels[option] ?? option);
+  options: UiOption[];
 }
 
 function normalizeQuestions(questions?: CustomQuestion[] | null) {
   if (questions?.length) {
-    return questions.slice(0, 3).map<UiQuestion>((question) => ({
+    return questions.slice(0, 5).map<UiQuestion>((question) => ({
       id: question.question_id,
       text: question.text_ko,
-      options: question.options?.length ? localizeOptions(question.options) : ['예', '아니오', '잘 모르겠어요'],
+      options: question.options?.length ? compactQuestionOptions(question.options) : compactQuestionOptions(['예', '아니오', '잘 모르겠어요']),
     }));
   }
 
   return fallbackQuestions.map<UiQuestion>((question) => ({
     id: question.question_id,
     text: question.text,
-    options: question.options,
+    options: compactQuestionOptions(question.options),
   }));
 }
 
-export function Questions({ onNext, questions }: Props) {
+const QUESTION_COUNT = 5;
+
+export function Questions({ onNext, onAnswerChange, questions, isLoading = false, selectionMode = null }: Props) {
   const [step, setStep] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{ label: string; value: string } | null>(null);
+  const [answers, setAnswers] = useState<AdaptiveAnswerPayload[]>([]);
+  const [isRefreshingNextQuestion, setIsRefreshingNextQuestion] = useState(false);
 
-  const activeQuestions = normalizeQuestions(questions);
-  const q = activeQuestions[Math.min(step, activeQuestions.length - 1)];
+  const answeredIds = new Set(answers.map((answer) => answer.question_id));
+  const activeQuestions = normalizeQuestions(questions).filter((question) => !answeredIds.has(question.id));
+  const q = activeQuestions[0] ?? normalizeQuestions(null)[0];
+  const loadingNextQuestion = isLoading || isRefreshingNextQuestion;
 
-  const handleNext = () => {
+  if (loadingNextQuestion) {
+    return (
+      <div className="h-full flex flex-col bg-white px-6">
+        <div className="flex-none pt-14 pb-6">
+          <div className="flex items-center gap-2">
+            {Array.from({ length: QUESTION_COUNT }).map((_, index) => (
+              <div
+                key={index}
+                className="h-1 flex-1 rounded-full"
+                style={{ background: index < step ? '#2A7BD6' : '#E5E7EB' }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 flex flex-col justify-center">
+          <div className="w-14 h-14 rounded-full flex items-center justify-center mb-6" style={{ background: '#EBF2FC' }}>
+            <div className="w-7 h-7 rounded-full animate-spin" style={{ border: '3px solid #BFDBFE', borderTopColor: '#2A7BD6' }} />
+          </div>
+          <p style={{ fontSize: 13, color: '#6B7280', fontWeight: 700, marginBottom: 8 }}>맞춤 질문 생성 중</p>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: '#1F2937', lineHeight: '140%' }}>
+            LLM이 방금 답변을 반영해<br />다음 질문을 고르고 있어요.
+          </h2>
+          <p style={{ fontSize: 14, color: '#9CA3AF', marginTop: 10, lineHeight: '150%' }}>
+            답변 이력, 마이데이터, 은퇴 후 생활비 입력값을 함께 반영합니다.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const handleNext = async () => {
     if (!selected) return;
-    if (step < activeQuestions.length - 1) {
+    const nextAnswers = [
+      ...answers.filter((answer) => answer.question_id !== q.id),
+      { question_id: q.id, answer: selected.value },
+    ];
+    setAnswers(nextAnswers);
+
+    if (nextAnswers.length >= QUESTION_COUNT) {
+      onNext(nextAnswers);
+      return;
+    }
+
+    setSelected(null);
+    setIsRefreshingNextQuestion(true);
+    try {
+      await onAnswerChange?.(nextAnswers);
       setStep(step + 1);
-      setSelected(null);
-    } else {
-      onNext();
+    } finally {
+      setIsRefreshingNextQuestion(false);
     }
   };
 
@@ -85,25 +131,25 @@ export function Questions({ onNext, questions }: Props) {
       {/* Header */}
       <div className="flex-none px-6 pt-14 pb-6">
         <div className="flex items-center gap-2 mb-6">
-          {[1, 2, 3, 4].map((i) => (
+          {Array.from({ length: QUESTION_COUNT }).map((_, index) => (
             <div
-              key={i}
+              key={index}
               className="h-1 flex-1 rounded-full"
-              style={{ background: i <= 3 ? '#2A7BD6' : '#E5E7EB' }}
+              style={{ background: index <= step ? '#2A7BD6' : '#E5E7EB' }}
             />
           ))}
         </div>
         <div className="flex items-center gap-2 mb-4">
-          <span
+	          <span
             className="rounded-full px-3 py-1"
             style={{ background: '#EBF2FC', color: '#2A7BD6', fontSize: '13px', fontWeight: 600 }}
           >
-            질문 {step + 1} / {activeQuestions.length}
-          </span>
+	            질문 {step + 1} / {QUESTION_COUNT}
+	          </span>
         </div>
-        <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '8px' }}>
-          3단계 · 맞춤 질문
-        </p>
+	        <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '8px' }}>
+	          3단계 · 맞춤 질문{selectionMode === 'llm_adaptive_question_selector' ? ' · LLM 선택 완료' : ''}
+	        </p>
         <h2 style={{ fontSize: '22px', fontWeight: 700, color: '#1F2937', lineHeight: '140%' }}>
           {q.text}
         </h2>
@@ -113,14 +159,14 @@ export function Questions({ onNext, questions }: Props) {
       </div>
 
       {/* Options */}
-      <div className="flex-1 px-6 space-y-3">
+      <div className="flex-1 px-6 space-y-2 overflow-y-auto pb-2">
         {q.options.map((option) => {
-          const isSelected = selected === option;
+          const isSelected = selected?.value === option.value;
           return (
             <button
-              key={option}
+              key={option.value}
               onClick={() => setSelected(option)}
-              className="w-full flex items-center gap-4 p-5 rounded-2xl transition-all text-left"
+              className="w-full flex items-center gap-3 p-4 rounded-2xl transition-all text-left"
               style={{
                 border: `1.5px solid ${isSelected ? '#2A7BD6' : '#E5E7EB'}`,
                 background: isSelected ? '#EBF2FC' : '#FFFFFF',
@@ -137,8 +183,8 @@ export function Questions({ onNext, questions }: Props) {
                   <div className="w-2 h-2 rounded-full bg-white" />
                 )}
               </div>
-              <span style={{ fontSize: '16px', fontWeight: isSelected ? 600 : 400, color: isSelected ? '#0D2B6B' : '#1F2937' }}>
-                {option}
+              <span style={{ fontSize: '15px', lineHeight: '145%', fontWeight: isSelected ? 600 : 400, color: isSelected ? '#0D2B6B' : '#1F2937' }}>
+                {option.label}
               </span>
             </button>
           );

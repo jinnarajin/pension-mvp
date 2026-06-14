@@ -94,11 +94,63 @@ export interface AnalyzeResponse {
   fwb_confidence: "indicative" | "validated";
   rationale: string;
   scenario_comparison?: ScenarioComparison;
+  priority_board?: {
+    explanation_profile?: {
+      difficulty?: string;
+    };
+  };
+  domain_gaps?: Array<{
+    label?: string;
+    severity?: string;
+    evidence?: string[];
+  }>;
+  answer_insights?: Array<Record<string, unknown>>;
+  adaptive_questions?: CustomQuestion[];
+  context_profile?: ContextProfile;
+  dashboard_treatment?: DashboardTreatment;
+}
+
+export interface ContextProfileAxis {
+  level: string;
+  source: string;
+  score?: number;
+  evidence?: string[];
+}
+
+export type ContextProfile = Record<
+  "current_cashflow" | "retirement_readiness" | "product_understanding" | "decision_check_behavior" | "financial_confidence",
+  ContextProfileAxis
+>;
+
+export interface DashboardTreatment {
+  explanation_style?: {
+    difficulty?: "easy" | "normal" | string;
+    primary_unit?: "monthly_amount" | "asset_projection" | string;
+    sentence_length?: "short" | "normal" | string;
+  };
+  card_priority?: string[];
+  sections?: {
+    show_easy_explanation?: boolean;
+    show_product_condition_cards?: boolean;
+    show_decision_checklist?: boolean;
+    show_family_or_advisor_summary?: boolean;
+  };
+  reasons?: Array<{
+    axis: string;
+    level: string;
+    reason: string;
+  }>;
+  source?: string;
 }
 
 export interface ApiRequestBase {
   customer_id: string;
   mydata_raw: MyDataPayload;
+}
+
+export interface AdaptiveAnswerPayload {
+  question_id: string;
+  answer: string | string[];
 }
 
 export interface StatusCheckResponse {
@@ -131,6 +183,8 @@ export interface CustomQuestionsResponse {
   llm_error: string;
   question_count: number;
   questions: CustomQuestion[];
+  context_profile?: ContextProfile;
+  dashboard_treatment?: DashboardTreatment;
 }
 
 export interface DashboardPoint {
@@ -210,7 +264,13 @@ export async function fetchStatusCheck(payload: ApiRequestBase): Promise<StatusC
   return postJson<StatusCheckResponse>("/status-check", payload);
 }
 
-export async function fetchCustomQuestions(payload: ApiRequestBase): Promise<CustomQuestionsResponse> {
+export async function fetchCustomQuestions(
+  payload: ApiRequestBase & {
+    answer_history?: AdaptiveAnswerPayload[];
+    retirement_age?: number;
+    target_monthly_expense?: number;
+  },
+): Promise<CustomQuestionsResponse> {
   return postJson<CustomQuestionsResponse>("/custom-questions", payload);
 }
 
@@ -259,6 +319,7 @@ export async function fetchAiDiagnosis(
   extras: AiAgentExtras = {},
   mydataOverride?: MyDataPayload,
   cfpb?: CfpbPayload,
+  adaptiveAnswerHistory: AdaptiveAnswerPayload[] = [],
 ): Promise<AnalyzeResponse> {
   const customer_id = extras.customer_id ?? "FE-LOCAL";
   const query = extras.query ?? "현재 노후 준비 상태를 진단하고 갈아타기가 필요한지 알려주세요.";
@@ -272,7 +333,16 @@ export async function fetchAiDiagnosis(
   const r = await fetch(`${API_URL}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customer_id, query, mydata_raw, cfpb, scenario_options }),
+    body: JSON.stringify({
+      customer_id,
+      query,
+      mydata_raw,
+      cfpb,
+      retirement_age: scenario_options.retirement_age,
+      target_monthly_expense: scenario_options.target_monthly_expense,
+      scenario_options,
+      adaptive_answer_history: adaptiveAnswerHistory,
+    }),
   });
 
   if (!r.ok) {
@@ -284,7 +354,7 @@ export async function fetchAiDiagnosis(
 
 // ── Form → MyData synthesis ────────────────────────────────────────
 
-function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras): MyDataPayload {
+export function buildMyDataFromForm(input: PensionInput, extras: AiAgentExtras = {}): MyDataPayload {
   const age = extras.age ?? 50;
   const retire_age = extras.retire_age ?? Math.max(age + 1, 60);
   const years_to_retire = Math.max(0, retire_age - age);

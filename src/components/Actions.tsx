@@ -1,44 +1,15 @@
 import { useState } from 'react';
+import type { AnalyzeResponse } from '../services/pensionAiAgent';
+import { buildActionViewModel } from '../services/pensionViewModels';
 
 interface Props {
   onBack: () => void;
+  analysis?: AnalyzeResponse | null;
 }
 
-const actions = [
-  {
-    id: 'irp',
-    priority: 1,
-    title: '연금저축·IRP 추가 납입',
-    effect: '안정 기간 3년 연장',
-    desc: '매달 20만원을 IRP에 추가로 넣으면 세액공제(최대 16.5%)도 받고, 노후 준비도 할 수 있어요.',
-    badge: '추천 행동',
-    badgeColor: '#37C27B',
-    amount: '월 20만원',
-  },
-  {
-    id: 'parttime',
-    priority: 2,
-    title: '은퇴 후 파트타임 소득 확보',
-    effect: '소득 공백 기간 단축',
-    desc: '60~65세 사이 월 100만원 정도의 파트타임 소득이 있으면 소득 공백을 크게 줄일 수 있어요.',
-    badge: '고려해 보세요',
-    badgeColor: '#2A7BD6',
-    amount: '월 100만원',
-  },
-  {
-    id: 'living',
-    priority: 3,
-    title: '생활비 지출 계획 수립',
-    effect: '연간 지출 최적화',
-    desc: '생활비를 200만원으로 줄이면 안정 기간이 5년 이상 늘어나요. 실제 지출 내역을 점검해 볼게요.',
-    badge: '절약 효과',
-    badgeColor: '#D97706',
-    amount: '월 30만원 절감',
-  },
-];
-
-export function Actions({ onBack }: Props) {
+export function Actions({ onBack, analysis = null }: Props) {
   const [saved, setSaved] = useState(false);
+  const actions = buildActionViewModel(analysis);
 
   return (
     <div className="h-full flex flex-col bg-white overflow-y-auto">
@@ -61,7 +32,7 @@ export function Actions({ onBack }: Props) {
             지금 준비할 수 있는<br />방법을 알려드릴게요.
           </h2>
           <p style={{ fontSize: '15px', color: '#6B7280', marginTop: '6px', lineHeight: '150%' }}>
-            매달 20만원을 더 준비하면<br />안정 기간을 3년 더 늘릴 수 있어요.
+            분석 결과에서 우선순위가 높은<br />실행 항목부터 정리했어요.
           </p>
         </div>
 
@@ -117,8 +88,8 @@ export function Actions({ onBack }: Props) {
           </p>
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: '현재 계획', year: '78세', color: '#D97706', bg: '#FEF3C7' },
-              { label: '추천 행동 시', year: '84세', color: '#37C27B', bg: '#D1FAE5' },
+              { label: '현재 위험도', year: analysis?.tier ?? '주의', color: '#D97706', bg: '#FEF3C7' },
+              { label: '권장 흐름', year: analysis?.downstream_action === 'ui_simple_home' ? '간편관리' : '집중관리', color: '#37C27B', bg: '#D1FAE5' },
             ].map((s) => (
               <div
                 key={s.label}
@@ -127,12 +98,12 @@ export function Actions({ onBack }: Props) {
               >
                 <p style={{ fontSize: '12px', color: '#6B7280', marginBottom: '4px' }}>{s.label}</p>
                 <p style={{ fontSize: '22px', fontWeight: 700, color: s.color }}>{s.year}</p>
-                <p style={{ fontSize: '12px', color: '#6B7280', marginTop: '2px' }}>안정 유지</p>
+                <p style={{ fontSize: '12px', color: '#6B7280', marginTop: '2px' }}>분석 기준</p>
               </div>
             ))}
           </div>
           <p className="text-center mt-3" style={{ fontSize: '13px', color: '#4B7CBD' }}>
-            추천 행동 시 6년 더 안정적으로 생활할 수 있어요.
+            선택한 계획은 상담 또는 다음 방문 때 이어서 점검할 수 있어요.
           </p>
         </div>
 

@@ -10,12 +10,19 @@ import { Report } from "./components/Report";
 import { Snapshot } from "./components/Snapshot";
 import type { PensionInput } from "./models/pension";
 import {
+  buildMyDataFromForm,
   fetchCustomQuestions,
   fetchAiDiagnosis,
   fetchPersona,
+  fetchResultDashboard,
+  fetchStatusCheck,
   pensionInputFromMyData,
+  type AdaptiveAnswerPayload,
+  type AnalyzeResponse,
   type CustomQuestion,
   type MyDataPayload,
+  type ResultDashboardResponse,
+  type StatusCheckResponse,
 } from "./services/pensionAiAgent";
 
 type Screen =
@@ -53,22 +60,72 @@ function App() {
   const [screen, setScreen] = useState<Screen>("onboarding");
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
   const [mydata, setMydata] = useState<MyDataPayload | undefined>();
+  const [statusCheck, setStatusCheck] = useState<StatusCheckResponse | null>(null);
   const [customQuestions, setCustomQuestions] = useState<CustomQuestion[] | null>(null);
+  const [customQuestionsLoading, setCustomQuestionsLoading] = useState(false);
+  const [customQuestionSelectionMode, setCustomQuestionSelectionMode] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalyzeResponse | null>(null);
+  const [resultDashboard, setResultDashboard] = useState<ResultDashboardResponse | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisStage, setAnalysisStage] = useState("분석을 준비하고 있어요.");
   const [retireAge, setRetireAge] = useState(60);
 
   const navigate = useCallback((to: Screen) => {
     setScreen(to);
   }, []);
 
-  async function loadBackendViewData(payload: MyDataPayload) {
+  async function loadBackendViewData(
+    payload: MyDataPayload,
+    options: { retirementAge?: number; targetMonthlyExpense?: number; answers?: AdaptiveAnswerPayload[] } = {},
+  ) {
     const request = {
       customer_id: "FIGMA-MAKE-MVP",
       mydata_raw: payload,
+      retirement_age: options.retirementAge,
+      target_monthly_expense: options.targetMonthlyExpense,
+      answer_history: options.answers ?? [],
     };
 
-    const questions = await fetchCustomQuestions(request).catch(() => null);
+    setCustomQuestionsLoading(true);
+    setCustomQuestions(null);
+    setCustomQuestionSelectionMode(null);
+    const [status, questions] = await Promise.all([
+      fetchStatusCheck(request).catch(() => null),
+      fetchCustomQuestions(request).catch(() => null),
+    ]);
 
-    setCustomQuestions(questions ? questions.questions.slice(0, 3) : null);
+    setStatusCheck(status);
+    setCustomQuestions(questions ? questions.questions.slice(0, 5) : null);
+    setCustomQuestionSelectionMode(questions?.selection_mode ?? null);
+    setCustomQuestionsLoading(false);
+  }
+
+  async function refreshQuestionsForAnswers(answers: AdaptiveAnswerPayload[]) {
+    const payload = mydata ?? buildMyDataFromForm(input, { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: retireAge });
+    setMydata(payload);
+    setCustomQuestionsLoading(true);
+    setCustomQuestions(null);
+    setCustomQuestionSelectionMode(null);
+
+    try {
+      const questions = await fetchCustomQuestions({
+        customer_id: "FIGMA-MAKE-MVP",
+        mydata_raw: payload,
+        retirement_age: retireAge,
+        target_monthly_expense: input.targetMonthlyCost,
+        answer_history: answers,
+      });
+
+      setCustomQuestions(questions.questions.slice(0, 5));
+      setCustomQuestionSelectionMode(questions.selection_mode);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "다음 맞춤 질문 생성에 실패했습니다.");
+      setCustomQuestions(null);
+    } finally {
+      setCustomQuestionsLoading(false);
+    }
   }
 
   async function handleSnapshotNext(values: { livingCostManwon: number; retireAge: number }) {
@@ -82,7 +139,12 @@ function App() {
     setInput(nextInput);
     setRetireAge(values.retireAge);
     setScreen("questions");
-
+    const payload = mydata ?? buildMyDataFromForm(nextInput, { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: values.retireAge });
+    setMydata(payload);
+    void loadBackendViewData(payload, {
+      retirementAge: values.retireAge,
+      targetMonthlyExpense: targetMonthlyCost,
+    });
   }
 
   async function completeConsent() {
@@ -93,26 +155,114 @@ function App() {
       setMydata(payload);
       setInput(nextInput);
       setRetireAge(nextRetireAge);
+      setApiError(null);
       setScreen("snapshot");
-      void loadBackendViewData(payload);
-    } catch {
-      setMydata(undefined);
+      void loadBackendViewData(payload, {
+        retirementAge: nextRetireAge,
+        targetMonthlyExpense: nextInput.targetMonthlyCost,
+      });
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "데이터 연동에 실패했습니다.");
+      const fallbackPayload = buildMyDataFromForm(input, { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: retireAge });
+      setMydata(fallbackPayload);
       setCustomQuestions(null);
+      setCustomQuestionsLoading(false);
+      setCustomQuestionSelectionMode(null);
       setScreen("snapshot");
     }
   }
 
-  async function analyzePension() {
+  async function analyzePension(answers: AdaptiveAnswerPayload[]) {
     setScreen("analyzing");
+    setIsAnalyzing(true);
+    setAnalysisProgress(5);
+    setAnalysisStage("답변 기반 맞춤 질문을 LLM으로 다시 고르는 중");
+    setApiError(null);
+
+    const payload = mydata ?? buildMyDataFromForm(input, { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: retireAge });
+    setMydata(payload);
+
+    const request = {
+      customer_id: "FIGMA-MAKE-MVP",
+      mydata_raw: payload,
+      retirement_age: retireAge,
+      target_monthly_expense: input.targetMonthlyCost,
+    };
+
     try {
-      await fetchAiDiagnosis(
+      const rerankedQuestions = await fetchCustomQuestions({
+        ...request,
+        answer_history: answers,
+      });
+      setCustomQuestions(rerankedQuestions.questions.slice(0, 5));
+      setCustomQuestionSelectionMode(rerankedQuestions.selection_mode);
+      setAnalysisProgress(rerankedQuestions.llm_used ? 35 : 28);
+      setAnalysisStage(
+        rerankedQuestions.llm_used
+          ? "LLM이 답변을 반영한 질문 우선순위를 확정했어요."
+          : "질문 우선순위 계산을 마치고 최종 분석으로 넘어가요.",
+      );
+    } catch (error) {
+      setAnalysisProgress(25);
+      setAnalysisStage("질문 재선택을 건너뛰고 최종 분석을 진행해요.");
+      setApiError(error instanceof Error ? error.message : "답변 기반 질문 재선택에 실패했습니다.");
+    }
+
+    setAnalysisProgress(45);
+    setAnalysisStage("최종 AI 분석과 자산 예측을 계산하는 중");
+
+    const [analysis, dashboard] = await Promise.allSettled([
+      fetchAiDiagnosis(
         input,
         { customer_id: "FIGMA-MAKE-MVP", age: 55, retire_age: retireAge },
-        mydata,
-      );
-    } catch {
-      // The prototype keeps moving even if the optional AI diagnosis call fails.
+        payload,
+        undefined,
+        answers,
+      ),
+      fetchResultDashboard(request),
+    ]);
+
+    if (analysis.status === "fulfilled") {
+      setAnalysisResult(analysis.value);
+    } else {
+      setAnalysisResult(null);
+      setApiError(analysis.reason instanceof Error ? analysis.reason.message : "AI 분석에 실패했습니다.");
     }
+
+    if (dashboard.status === "fulfilled") {
+      setResultDashboard(dashboard.value);
+    } else {
+      setResultDashboard(null);
+      setApiError(dashboard.reason instanceof Error ? dashboard.reason.message : "결과 대시보드 계산에 실패했습니다.");
+    }
+
+    setAnalysisProgress(100);
+    setAnalysisStage("분석 결과를 정리했어요.");
+    setIsAnalyzing(false);
+  }
+
+  function handleAnalyzingNext() {
+    setScreen("report");
+  }
+
+  async function refreshDashboard() {
+    if (!mydata) return;
+    const dashboard = await fetchResultDashboard({
+      customer_id: "FIGMA-MAKE-MVP",
+      mydata_raw: mydata,
+      retirement_age: retireAge,
+      target_monthly_expense: input.targetMonthlyCost,
+    }).catch(() => null);
+    if (dashboard) {
+      setResultDashboard(dashboard);
+    }
+  }
+
+  function navigateResult(to: Screen) {
+    if (to === "dashboard" && !resultDashboard) {
+      void refreshDashboard();
+    }
+    navigate(to);
   }
 
   return (
@@ -170,22 +320,28 @@ function App() {
             <DataConsent onNext={completeConsent} />
           )}
           {screen === 'snapshot' && (
-            <Snapshot onNext={handleSnapshotNext} />
+            <Snapshot status={statusCheck} initialLivingCost={input.targetMonthlyCost} initialRetireAge={retireAge} error={apiError} onNext={handleSnapshotNext} />
           )}
           {screen === 'questions' && (
-            <Questions questions={customQuestions} onNext={analyzePension} />
+            <Questions
+              questions={customQuestions}
+              isLoading={customQuestionsLoading}
+              selectionMode={customQuestionSelectionMode}
+              onAnswerChange={refreshQuestionsForAnswers}
+              onNext={analyzePension}
+            />
           )}
           {screen === 'analyzing' && (
-            <Analyzing onNext={() => navigate('report')} />
+            <Analyzing progress={analysisProgress} stageLabel={analysisStage} isComplete={!isAnalyzing} error={apiError} onNext={handleAnalyzingNext} />
           )}
           {screen === 'report' && (
-            <Report onNext={() => navigate('dashboard')} onBack={() => navigate('analyzing')} />
+            <Report analysis={analysisResult} dashboard={resultDashboard} error={apiError} onNext={() => navigateResult('dashboard')} onBack={() => navigate('questions')} />
           )}
           {screen === 'dashboard' && (
-            <Dashboard onNext={() => navigate('actions')} />
+            <Dashboard dashboard={resultDashboard} analysis={analysisResult} onNext={() => navigate('actions')} />
           )}
           {screen === 'actions' && (
-            <Actions onBack={() => navigate('dashboard')} />
+            <Actions analysis={analysisResult} onBack={() => navigate('dashboard')} />
           )}
         </div>
 

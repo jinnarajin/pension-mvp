@@ -1,4 +1,5 @@
 import { useState, type ChangeEvent } from 'react';
+import type { StatusCheckResponse } from '../services/pensionAiAgent';
 
 interface SnapshotValues {
   livingCostManwon: number;
@@ -7,14 +8,22 @@ interface SnapshotValues {
 
 interface Props {
   onNext: (values: SnapshotValues) => void;
+  status?: StatusCheckResponse | null;
+  initialLivingCost?: number;
+  initialRetireAge?: number;
+  error?: string | null;
 }
 
 const MIN_AGE = 50;
 const MAX_AGE = 80;
 
-export function Snapshot({ onNext }: Props) {
-  const [livingCost, setLivingCost] = useState('');
-  const [retireAge, setRetireAge] = useState<number | null>(null);
+function formatWon(value: number) {
+  return `${Math.round(value / 10_000).toLocaleString()}만원`;
+}
+
+export function Snapshot({ onNext, status, initialLivingCost, initialRetireAge, error }: Props) {
+  const [livingCost, setLivingCost] = useState(initialLivingCost ? String(Math.round(initialLivingCost / 10_000)) : '');
+  const [retireAge, setRetireAge] = useState<number | null>(initialRetireAge ?? null);
   const [focused, setFocused] = useState(false);
   const [isAgeOpen, setIsAgeOpen] = useState(false);
 
@@ -60,6 +69,27 @@ export function Snapshot({ onNext }: Props) {
 
       {/* Inputs */}
       <div className="flex-1 px-6 space-y-5 overflow-y-auto pb-6">
+        {error && (
+          <div className="p-4 rounded-2xl" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+            <p style={{ fontSize: '13px', color: '#92400E', lineHeight: '150%' }}>
+              백엔드 연결 일부가 실패해 기본 입력값으로 진행합니다.
+            </p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { label: '예상 월 연금', value: status ? formatWon(status.expected_monthly_pension) : '계산 중' },
+            { label: '금융자산', value: status ? formatWon(status.financial_asset_total) : '계산 중' },
+            { label: '대출 잔액', value: status ? formatWon(status.loan_balance_total) : '계산 중' },
+            { label: '현재 생활비', value: status ? formatWon(status.current_monthly_living_expense) : '계산 중' },
+          ].map((item) => (
+            <div key={item.label} className="p-4 rounded-2xl" style={{ border: '1px solid #E5E7EB', background: '#F9FAFB' }}>
+              <p style={{ fontSize: '12px', color: '#6B7280', marginBottom: '4px' }}>{item.label}</p>
+              <p style={{ fontSize: '17px', fontWeight: 700, color: '#0D2B6B' }}>{item.value}</p>
+            </div>
+          ))}
+        </div>
 
         {/* 은퇴 후 월 생활비 */}
         <div>
