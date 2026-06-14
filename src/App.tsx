@@ -281,6 +281,7 @@ function App() {
           overflow: 'hidden',
           boxShadow: '0 24px 80px rgba(13,43,107,0.25)',
           borderRadius: '40px',
+          marginBottom: '88px',
         }}
       >
         {/* Status bar simulation */}
