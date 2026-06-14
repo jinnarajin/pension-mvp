@@ -139,6 +139,28 @@ def _severity_label(score: float) -> str:
     return "low"
 
 
+def _three_level(score: float, *, vulnerable_when_high: bool = True) -> str:
+    if vulnerable_when_high:
+        if score >= 0.6:
+            return "low"
+        if score >= 0.3:
+            return "medium"
+        return "high"
+    if score >= 0.6:
+        return "high"
+    if score >= 0.3:
+        return "medium"
+    return "low"
+
+
+def _cashflow_level(score: float) -> str:
+    if score >= 0.6:
+        return "vulnerable"
+    if score >= 0.3:
+        return "moderate"
+    return "stable"
+
+
 def _active_hints(data: MyDataInput, features: dict[str, Any]) -> set[str]:
     monthly_income = int(features.get("monthly_income_total", 0))
     monthly_expense = int(features.get("monthly_expense_total", 0))
@@ -406,6 +428,10 @@ def select_questions(
     for item in ADAPTIVE_QUESTION_POOL:
         if item.id in answered_ids:
             continue
+        if item.response_scale == "likert_7":
+            continue
+        if item.category in {"debt_perception"}:
+            continue
         if str(item.source) not in SERVICE_BANK_SOURCES:
             continue
         domain = _domain_for_question(item)
@@ -550,6 +576,140 @@ def build_persona_context(features: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _gap_by_domain(domain_gaps: list[dict[str, Any]], domain: str) -> dict[str, Any]:
+    for gap in domain_gaps:
+        if gap.get("domain") == domain:
+            return gap
+    return {}
+
+
+def _answer_confirmed(answer_insights: list[dict[str, Any]], domain: str) -> bool:
+    return any(
+        insight.get("domain") == domain and insight.get("signals", {}).get("gap_confirmed")
+        for insight in answer_insights
+    )
+
+
+def build_context_profile(
+    features: dict[str, Any],
+    domain_gaps: list[dict[str, Any]],
+    answer_insights: list[dict[str, Any]],
+) -> dict[str, Any]:
+    monthly_income = max(1, int(features.get("monthly_income_total", 0)))
+    monthly_expense = int(features.get("monthly_expense_total", 0))
+    net_cashflow = int(features.get("net_cashflow_monthly", 0))
+    liquid = int(features.get("liquid_asset_total", 0))
+    shortfall = int(features.get("shortfall_monthly", 0))
+    income_gap_months = int(features.get("income_gap_months", 0))
+    survival_months = float(features.get("survival_months_at_retirement", 99) or 99)
+
+    expense_ratio = monthly_expense / monthly_income
+    cashflow_score = 0.0
+    cashflow_evidence = []
+    if net_cashflow < max(300_000, monthly_expense * 0.1):
+        cashflow_score += 0.35
+        cashflow_evidence.append("월 순현금흐름 여유가 낮음")
+    if liquid < monthly_expense * 3:
+        cashflow_score += 0.35
+        cashflow_evidence.append("3개월 생활비 대비 유동자산 부족")
+    if expense_ratio >= 0.75:
+        cashflow_score += 0.2
+        cashflow_evidence.append("월 지출이 소득 대비 높음")
+
+    retirement_score = 0.0
+    retirement_evidence = []
+    retirement_state = "stable"
+    if income_gap_months > 0:
+        retirement_score += 0.35
+        retirement_state = "income_gap"
+        retirement_evidence.append(f"연금 개시 전 소득공백 {income_gap_months}개월")
+    if shortfall > 0:
+        retirement_score += 0.4
+        retirement_state = "monthly_shortfall"
+        retirement_evidence.append(f"은퇴 후 월 부족액 {shortfall:,}원")
+    if survival_months < 24:
+        retirement_score += 0.25
+        retirement_evidence.append(f"은퇴 직후 생존여력 {survival_months:.1f}개월")
+
+    profile = {
+        "current_cashflow": {
+            "level": _cashflow_level(min(1.0, cashflow_score)),
+            "source": "mydata",
+            "score": round(min(1.0, cashflow_score), 3),
+            "evidence": cashflow_evidence or ["현금흐름 압박 신호가 크지 않음"],
+        },
+        "retirement_readiness": {
+            "level": retirement_state,
+            "source": "mydata",
+            "score": round(min(1.0, retirement_score), 3),
+            "evidence": retirement_evidence or ["소득공백과 월 부족액 신호가 크지 않음"],
+        },
+    }
+
+    for domain in ("product_understanding", "decision_check_behavior", "financial_confidence"):
+        gap = _gap_by_domain(domain_gaps, domain)
+        score = float(gap.get("score", 0))
+        if _answer_confirmed(answer_insights, domain):
+            score = max(score, 0.75)
+        profile[domain] = {
+            "level": _three_level(min(1.0, score)),
+            "source": "answer_history" if _answer_confirmed(answer_insights, domain) else "mydata_inferred",
+            "score": round(min(1.0, score), 3),
+            "evidence": gap.get("evidence", ["확인 필요"]),
+        }
+
+    return profile
+
+
+def build_dashboard_treatment(
+    context_profile: dict[str, Any],
+    domain_gaps: list[dict[str, Any]],
+    answer_insights: list[dict[str, Any]],
+) -> dict[str, Any]:
+    low_product = context_profile["product_understanding"]["level"] == "low"
+    low_decision = context_profile["decision_check_behavior"]["level"] == "low"
+    low_confidence = context_profile["financial_confidence"]["level"] == "low"
+    cashflow_pressure = context_profile["current_cashflow"]["level"] == "vulnerable"
+    retirement_not_stable = context_profile["retirement_readiness"]["level"] != "stable"
+
+    card_priority = ["monthly_cashflow", "shortage_timing", "scenario_comparison"]
+    if low_product:
+        card_priority.append("product_condition_check")
+    if low_decision:
+        card_priority.append("decision_checklist")
+    if low_confidence:
+        card_priority.append("share_summary")
+
+    reasons = []
+    for axis, data in context_profile.items():
+        if data.get("level") in {"low", "vulnerable", "income_gap", "monthly_shortfall"}:
+            reasons.append({
+                "axis": axis,
+                "level": data.get("level"),
+                "reason": " · ".join(str(item) for item in data.get("evidence", [])[:2]),
+            })
+
+    return {
+        "explanation_style": {
+            "difficulty": "easy" if low_confidence else "normal",
+            "primary_unit": "monthly_amount" if cashflow_pressure or low_confidence else "asset_projection",
+            "sentence_length": "short" if low_confidence else "normal",
+        },
+        "card_priority": card_priority,
+        "sections": {
+            "show_easy_explanation": low_confidence,
+            "show_product_condition_cards": low_product,
+            "show_decision_checklist": low_decision or retirement_not_stable,
+            "show_family_or_advisor_summary": low_confidence or any(
+                insight.get("target_context") in {"decision_owner", "shared_summary_need"}
+                for insight in answer_insights
+            ),
+        },
+        "reasons": reasons,
+        "source": "context_profile",
+    }
+
+
 def build_adaptive_questionnaire_state(
     mydata_raw: dict,
     answer_history: list[dict[str, Any]] | None = None,
@@ -569,6 +729,8 @@ def build_adaptive_questionnaire_state(
     questions = select_questions(data, features, domain_gaps, answer_history, limit)
     priority_board = build_priority_board(domain_gaps, answer_insights)
     persona_context = build_persona_context(features)
+    context_profile = build_context_profile(features, domain_gaps, answer_insights)
+    dashboard_treatment = build_dashboard_treatment(context_profile, domain_gaps, answer_insights)
 
     return {
         "selection_mode": "adaptive_questionnaire_agent",
@@ -580,5 +742,7 @@ def build_adaptive_questionnaire_state(
         "answer_insights": answer_insights,
         "priority_board": priority_board,
         "persona_context": persona_context,
+        "context_profile": context_profile,
+        "dashboard_treatment": dashboard_treatment,
         "source_profile": asdict(data.profile),
     }

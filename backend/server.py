@@ -108,6 +108,10 @@ class AnalyzeResponse(BaseModel):
     scenario_comparison: dict = {}
     priority_board:   dict = {}
     adaptive_questions: list[dict] = []
+    domain_gaps:      list[dict] = []
+    answer_insights:  list[dict] = []
+    context_profile:  dict = {}
+    dashboard_treatment: dict = {}
 
 
 # ── 엔드포인트 ──────────────────────────────────────────
@@ -167,6 +171,10 @@ async def analyze(req: AnalyzeRequest):
             scenario_comparison=dataclasses.asdict(scenario) if scenario else {},
             priority_board=adaptive.priority_board if adaptive else {},
             adaptive_questions=adaptive.questions if adaptive else [],
+            domain_gaps=adaptive.domain_gaps if adaptive else [],
+            answer_insights=adaptive.answer_insights if adaptive else [],
+            context_profile=adaptive.context_profile if adaptive else {},
+            dashboard_treatment=adaptive.dashboard_treatment if adaptive else {},
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

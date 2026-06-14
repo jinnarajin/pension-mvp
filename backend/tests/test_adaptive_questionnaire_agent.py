@@ -38,6 +38,16 @@ def test_adaptive_questionnaire_returns_only_three_question_domains():
 
     assert "current_cashflow" in payload["persona_context"]
     assert "retirement_preparedness" in payload["persona_context"]
+    assert set(payload["context_profile"]) == {
+        "current_cashflow",
+        "retirement_readiness",
+        "product_understanding",
+        "decision_check_behavior",
+        "financial_confidence",
+    }
+    assert payload["context_profile"]["current_cashflow"]["source"] == "mydata"
+    assert payload["context_profile"]["current_cashflow"]["level"] in {"vulnerable", "moderate", "stable"}
+    assert payload["context_profile"]["retirement_readiness"]["source"] == "mydata"
 
 
 def test_adaptive_questionnaire_excludes_answered_questions_and_uses_answers():
@@ -90,6 +100,14 @@ def test_adaptive_questionnaire_excludes_unowned_product_questions():
     assert "PU03" not in question_ids
 
 
+def test_adaptive_questionnaire_excludes_subjective_likert_debt_perception():
+    payload = build_adaptive_questionnaire_state(_persona_a_raw(), answer_history=[], limit=10)
+    question_ids = {question["question_id"] for question in payload["questions"]}
+
+    assert "PR11" not in question_ids
+    assert all(question["response_scale"] != "likert_7" for question in payload["questions"])
+
+
 def test_priority_board_maps_question_domains_to_dashboard_treatments():
     payload = build_adaptive_questionnaire_state(_persona_a_raw(), answer_history=[], limit=5)
     effects_by_domain = {
@@ -104,3 +122,31 @@ def test_priority_board_maps_question_domains_to_dashboard_treatments():
     }
     assert effects_by_domain["product_understanding"]["priority_cards"]
     assert "explanation_profile" in payload["priority_board"]
+
+
+def test_context_profile_and_dashboard_treatment_reflect_answered_low_confidence():
+    payload = build_adaptive_questionnaire_state(
+        _persona_a_raw(),
+        answer_history=[
+            {"question_id": "PU01", "answer": "거의 모른다"},
+            {"question_id": "DC03", "answer": "확인하지 않는다"},
+            {"question_id": "FC04", "answer": "전혀 자신 없다"},
+            {"question_id": "FC08", "answer": "도움이 필요하다"},
+        ],
+        limit=5,
+    )
+
+    profile = payload["context_profile"]
+    treatment = payload["dashboard_treatment"]
+
+    assert profile["product_understanding"]["level"] == "low"
+    assert profile["decision_check_behavior"]["level"] == "low"
+    assert profile["financial_confidence"]["level"] == "low"
+    assert treatment["explanation_style"]["difficulty"] == "easy"
+    assert treatment["explanation_style"]["primary_unit"] == "monthly_amount"
+    assert treatment["sections"]["show_easy_explanation"] is True
+    assert treatment["sections"]["show_product_condition_cards"] is True
+    assert treatment["sections"]["show_decision_checklist"] is True
+    assert treatment["sections"]["show_family_or_advisor_summary"] is True
+    assert "product_condition_check" in treatment["card_priority"]
+    assert any(reason["axis"] == "financial_confidence" for reason in treatment["reasons"])

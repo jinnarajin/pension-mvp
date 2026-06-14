@@ -44,6 +44,63 @@ def test_custom_questions_selects_five_questions_from_pool_without_llm():
     })
     assert payload["priority_board"]["primary_domain"]
     assert all(question["dashboard_effect"]["priority_cards"] for question in payload["questions"])
+    assert set(payload["context_profile"]) == {
+        "current_cashflow",
+        "retirement_readiness",
+        "product_understanding",
+        "decision_check_behavior",
+        "financial_confidence",
+    }
+    assert payload["dashboard_treatment"]["card_priority"]
+    assert payload["dashboard_treatment"]["source"] == "context_profile"
+
+
+def test_custom_questions_uses_llm_to_rerank_candidate_questions(monkeypatch):
+    import agents
+
+    def fake_llm_text(prompt, max_tokens=1200, json_mode=True):
+        assert json_mode is True
+        assert "question_pool" in prompt
+        return json.dumps({
+            "selections": [
+                {
+                    "question_id": "FC04",
+                    "reason": "사용자 실행 자신감이 결과 설명 난이도에 직접 영향을 주기 때문입니다.",
+                    "vulnerability_to_validate": "goal_execution_confidence",
+                },
+                {
+                    "question_id": "PU01",
+                    "reason": "대출 조건 이해 수준 확인이 필요합니다.",
+                    "vulnerability_to_validate": "loan_condition_understanding",
+                },
+            ]
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(agents, "_llm_text", fake_llm_text)
+
+    payload = select_custom_questions(_persona_a_raw(), limit=2, use_llm=True)
+
+    assert payload["llm_used"] is True
+    assert payload["llm_error"] == ""
+    assert payload["selection_mode"] == "llm_adaptive_question_selector"
+    assert [question["question_id"] for question in payload["questions"]] == ["FC04", "PU01"]
+    assert payload["questions"][0]["reason"].startswith("사용자 실행 자신감")
+
+
+def test_custom_questions_falls_back_when_llm_selection_fails(monkeypatch):
+    import agents
+
+    def fake_llm_text(prompt, max_tokens=1200, json_mode=True):
+        raise RuntimeError("llm unavailable")
+
+    monkeypatch.setattr(agents, "_llm_text", fake_llm_text)
+
+    payload = select_custom_questions(_persona_a_raw(), limit=3, use_llm=True)
+
+    assert payload["llm_used"] is False
+    assert "llm unavailable" in payload["llm_error"]
+    assert payload["selection_mode"] == "adaptive_questionnaire_agent"
+    assert payload["question_count"] == 3
 
 
 def test_custom_questions_excludes_answered_questions_and_updates_insights():
