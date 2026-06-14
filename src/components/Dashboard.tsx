@@ -187,10 +187,17 @@ export function Dashboard({ onNext, dashboard = null, analysis = null }: Props) 
   const selectedScenario = scenariosByMethod[method];
   const fallback = fallbackScenarios[method];
   const selectedMonthly = selectedScenario ? Math.round(selectedScenario.monthly_pension_from_retirement_money / 10_000) : fallback.monthly;
-  const selectedShortageAge = vm.shortageAge ?? fallback.shortageAge;
   const chartPoints = buildScenarioProjectionPoints(vm.chartPoints, selectedScenario, vm.retirementAge || 60);
+  const chartShortageAge = chartPoints.find((point) => point.isShortagePoint)?.age ?? null;
+  const selectedShortageAge = chartShortageAge ?? vm.shortageAge ?? fallback.shortageAge;
+  const recommendedMethod = vm.recommendedScenarioId
+    ? methodByScenario({ scenario_id: vm.recommendedScenarioId, title: vm.recommendedScenarioId, receipt_method: vm.recommendedScenarioId } as ScenarioResult)
+    : null;
+  const isSelectedRecommended = recommendedMethod === method || selectedScenario?.scenario_id === vm.recommendedScenarioId;
   const selectedInsight = selectedScenario
-    ? `${scenarioLabel(method, selectedScenario)} 선택 시 월 ${selectedMonthly.toLocaleString()}만원의 퇴직급여 현금흐름이 반영됩니다. ${vm.recommendationReason || '세금과 유동성 차이를 함께 비교해 보세요.'}`
+    ? selectedScenario.receipt_method === 'lump_sum'
+      ? `${scenarioLabel(method, selectedScenario)} 선택 시 초기 유동성 ${formatManwon(Math.round(selectedScenario.initial_liquidity / 10_000))}을 먼저 확보하는 흐름으로 반영됩니다. ${vm.recommendationReason || '세금과 유동성 차이를 함께 비교해 보세요.'}`
+      : `${scenarioLabel(method, selectedScenario)} 선택 시 월 ${selectedMonthly.toLocaleString()}만원의 퇴직급여 현금흐름이 반영됩니다. ${vm.recommendationReason || '세금과 유동성 차이를 함께 비교해 보세요.'}`
     : fallback.insight;
 
   return (
@@ -253,12 +260,26 @@ export function Dashboard({ onNext, dashboard = null, analysis = null }: Props) 
               style={{
                 background: method === id ? 'white' : 'transparent',
                 color: method === id ? '#0D2B6B' : '#6B7280',
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: method === id ? 700 : 400,
                 boxShadow: method === id ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
+                position: 'relative',
               }}
             >
               {scenarioLabel(id, scenariosByMethod[id])}
+              {(methodByScenario(scenariosByMethod[id] ?? { scenario_id: id, title: id, receipt_method: id } as ScenarioResult) === recommendedMethod) && (
+                <span
+                  style={{
+                    display: 'block',
+                    fontSize: 10,
+                    color: method === id ? '#37A66B' : '#6B7280',
+                    marginTop: 2,
+                    fontWeight: 700,
+                  }}
+                >
+                  추천
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -277,17 +298,17 @@ export function Dashboard({ onNext, dashboard = null, analysis = null }: Props) 
           <div className="p-4 rounded-2xl" style={{ border: '1px solid #E5E7EB' }}>
             <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>최초 부족 예상 시점</p>
             <p style={{ fontSize: 22, fontWeight: 700, color: '#D97706' }}>{selectedShortageAge}세</p>
-            <p style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>현재 계획 기준</p>
+            <p style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>선택 수령방식 기준</p>
           </div>
         </div>
 
         <div className="p-4 rounded-2xl" style={{ border: '1px solid #E5E7EB' }}>
           <div className="flex items-center justify-between mb-1">
-            <p style={{ fontSize: 14, fontWeight: 700, color: '#1F2937' }}>연령별 예상 자산 잔액</p>
+            <p style={{ fontSize: 14, fontWeight: 700, color: '#1F2937' }}>수령방식별 예상 자산 잔액</p>
             <span style={{ fontSize: 11, color: '#9CA3AF' }}>만원</span>
           </div>
           <p style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 8 }}>
-            주황 음영 구간이 백엔드 계산상 자산 부족이 시작되는 시점이에요.
+            선택한 퇴직급여 수령방식의 월 현금흐름을 반영한 근사 그래프예요.
           </p>
 
           <ProjectionChart points={chartPoints} shortageAge={selectedShortageAge} />
@@ -298,7 +319,9 @@ export function Dashboard({ onNext, dashboard = null, analysis = null }: Props) 
               <path d="M7 4.5 L7 7.5" stroke="#F59E0B" strokeWidth="1.5" strokeLinecap="round" />
               <circle cx="7" cy="9.5" r="0.8" fill="#F59E0B" />
             </svg>
-            <p style={{ fontSize: 12, color: '#92400E', lineHeight: '150%' }}>{selectedInsight}</p>
+            <p style={{ fontSize: 12, color: '#92400E', lineHeight: '150%' }}>
+              {isSelectedRecommended ? '추천 방식입니다. ' : ''}{selectedInsight}
+            </p>
           </div>
         </div>
 

@@ -411,9 +411,118 @@ export function buildScenarioProjectionPoints(
   scenario: ScenarioResult | undefined,
   retirementAge: number,
 ): DashboardChartPoint[] {
-  void scenario;
-  void retirementAge;
-  return basePoints;
+  if (!basePoints.length) {
+    return [];
+  }
+  if (!scenario) {
+    return normalizeProjectionPoints(basePoints);
+  }
+
+  const startPoint = basePoints[0];
+  const lifeAge = Math.max(Math.round(basePoints.at(-1)?.age ?? retirementAge + 25), retirementAge + 25);
+  const startAge = Math.round(startPoint.age);
+  const yearsToRetirement = Math.max(1, retirementAge - startAge);
+  const baseRetirementPoint = nearestPoint(basePoints, retirementAge);
+  const retirementBalance = Math.max(
+    startPoint.assetBalanceManwon,
+    baseRetirementPoint?.assetBalanceManwon ?? startPoint.assetBalanceManwon,
+    toManwon(scenario.initial_liquidity),
+  );
+  const totalSurvivalMonths = Math.max(0, scenario.survival_months_gap + scenario.survival_months_full);
+  const shortageAge = Math.min(lifeAge, Math.max(retirementAge + 1, retirementAge + Math.round(totalSurvivalMonths / 12)));
+  const monthlyPensionBoost = toManwon(scenario.monthly_pension_from_retirement_money);
+  const taxSavingBoost = toManwon(scenario.total_tax_saving_vs_lump_sum);
+  const shortageBalance = -Math.max(120, Math.round(retirementBalance * 0.015));
+  const annualPostShortageDrop = Math.max(
+    180,
+    Math.round((scenario.full_period_shortfall_monthly || scenario.gap_period_shortfall_monthly || 1_200_000) / 10_000 * 12 * 0.28),
+  );
+  const scenarioCushion = Math.max(0, monthlyPensionBoost * 2 + Math.round(taxSavingBoost / 3));
+  const points: DashboardChartPoint[] = [];
+
+  for (let age = startAge; age <= lifeAge; age += 1) {
+    let assetBalanceManwon: number;
+    if (age <= retirementAge) {
+      const progress = (age - startAge) / yearsToRetirement;
+      assetBalanceManwon = lerp(startPoint.assetBalanceManwon, retirementBalance, progress);
+    } else if (age <= shortageAge) {
+      const progress = (age - retirementAge) / Math.max(1, shortageAge - retirementAge);
+      assetBalanceManwon = lerp(retirementBalance, shortageBalance, progress);
+    } else {
+      const yearsAfterShortage = age - shortageAge;
+      assetBalanceManwon = shortageBalance - yearsAfterShortage * annualPostShortageDrop + scenarioCushion;
+    }
+
+    points.push({
+      age,
+      yearMonth: yearMonthFromAge(startPoint.yearMonth, startAge, age),
+      assetBalanceManwon: Math.round(assetBalanceManwon),
+      isShortagePoint: age === shortageAge,
+    });
+  }
+
+  if (!points.some((point) => point.isShortagePoint)) {
+    const shortagePoint = nearestPoint(points, shortageAge);
+    if (shortagePoint) {
+      shortagePoint.isShortagePoint = true;
+    }
+  }
+
+  return points;
+}
+
+function normalizeProjectionPoints(points: DashboardChartPoint[]): DashboardChartPoint[] {
+  if (points.length < 2) {
+    return points;
+  }
+
+  const normalized: DashboardChartPoint[] = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    normalized.push(current);
+
+    const ageGap = Math.round(next.age - current.age);
+    if (ageGap <= 1 || Math.abs(next.assetBalanceManwon - current.assetBalanceManwon) < 5000) {
+      continue;
+    }
+
+    for (let step = 1; step < ageGap; step += 1) {
+      const progress = step / ageGap;
+      normalized.push({
+        age: Math.round(current.age + step),
+        yearMonth: yearMonthFromAge(current.yearMonth, Math.round(current.age), Math.round(current.age + step)),
+        assetBalanceManwon: Math.round(lerp(current.assetBalanceManwon, next.assetBalanceManwon, smoothstep(progress))),
+        isShortagePoint: false,
+      });
+    }
+  }
+  normalized.push(points[points.length - 1]);
+  return normalized;
+}
+
+function nearestPoint(points: DashboardChartPoint[], age: number): DashboardChartPoint | undefined {
+  return points.reduce<DashboardChartPoint | undefined>((best, point) => {
+    if (!best) {
+      return point;
+    }
+    return Math.abs(point.age - age) < Math.abs(best.age - age) ? point : best;
+  }, undefined);
+}
+
+function lerp(start: number, end: number, progress: number): number {
+  return start + (end - start) * Math.min(1, Math.max(0, progress));
+}
+
+function smoothstep(progress: number): number {
+  const t = Math.min(1, Math.max(0, progress));
+  return t * t * (3 - 2 * t);
+}
+
+function yearMonthFromAge(startYearMonth: string, startAge: number, age: number): string {
+  const [year = "2026", month = "06"] = startYearMonth.split("-");
+  const yearNumber = Number(year) || 2026;
+  return `${yearNumber + Math.round(age - startAge)}-${month}`;
 }
 
 export function buildDashboardViewModel(
