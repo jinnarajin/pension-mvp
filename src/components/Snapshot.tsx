@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent } from 'react';
 import type { StatusCheckResponse } from '../services/pensionAiAgent';
+import { StepProgress } from './StepProgress';
 
 interface SnapshotValues {
   livingCostManwon: number;
@@ -44,11 +45,7 @@ export function Snapshot({ onNext, status, initialLivingCost, initialRetireAge, 
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
       <div className="flex-none px-6 pt-14 pb-6">
-        <div className="flex items-center gap-2 mb-6">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-1 flex-1 rounded-full" style={{ background: i <= 2 ? '#2A7BD6' : '#E5E7EB' }} />
-          ))}
-        </div>
+        <StepProgress progress={2 / 3} />
         <div className="flex items-center gap-2 mb-4">
           <div className="flex items-center justify-center w-8 h-8 rounded-full" style={{ background: '#ECFDF5' }}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -59,6 +56,7 @@ export function Snapshot({ onNext, status, initialLivingCost, initialRetireAge, 
             연결 완료
           </span>
         </div>
+        <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '8px' }}>2단계 · 현황 확인</p>
         <h2 style={{ fontSize: '24px', fontWeight: 700, color: '#1F2937', lineHeight: '140%' }}>
           목표를 알려주세요.
         </h2>
@@ -230,7 +228,7 @@ export function Snapshot({ onNext, status, initialLivingCost, initialRetireAge, 
           disabled={!canContinue}
           className="w-full flex items-center justify-center rounded-xl transition-all"
           style={{
-            background: canContinue ? '#2A7BD6' : '#E5E7EB',
+            background: canContinue ? '#0D2B6B' : '#E5E7EB',
             color: canContinue ? '#FFFFFF' : '#9CA3AF',
             height: '56px',
             fontSize: '17px',

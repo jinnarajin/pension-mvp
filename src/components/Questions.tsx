@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AdaptiveAnswerPayload, CustomQuestion } from '../services/pensionAiAgent';
 import { compactQuestionOptions, type UiOption } from '../services/questionOptions';
+import { StepProgress } from './StepProgress';
 
 interface Props {
   onNext: (answers: AdaptiveAnswerPayload[]) => void;
@@ -72,20 +73,15 @@ export function Questions({ onNext, onAnswerChange, questions, isLoading = false
   const activeQuestions = normalizeQuestions(questions).filter((question) => !answeredIds.has(question.id));
   const q = activeQuestions[0] ?? normalizeQuestions(null)[0];
   const loadingNextQuestion = isLoading || isRefreshingNextQuestion;
+  const visibleQuestionCount = loadingNextQuestion ? answers.length : step + 1;
+  const questionProgress = Math.min(QUESTION_COUNT, Math.max(0, visibleQuestionCount)) / QUESTION_COUNT;
+  const progress = 2 / 3 + questionProgress / 3;
 
   if (loadingNextQuestion) {
     return (
       <div className="h-full flex flex-col bg-white px-6">
         <div className="flex-none pt-14 pb-6">
-          <div className="flex items-center gap-2">
-            {Array.from({ length: QUESTION_COUNT }).map((_, index) => (
-              <div
-                key={index}
-                className="h-1 flex-1 rounded-full"
-                style={{ background: index < step ? '#2A7BD6' : '#E5E7EB' }}
-              />
-            ))}
-          </div>
+          <StepProgress progress={progress} />
         </div>
         <div className="flex-1 flex flex-col justify-center">
           <div className="w-14 h-14 rounded-full flex items-center justify-center mb-6" style={{ background: '#EBF2FC' }}>
@@ -130,15 +126,7 @@ export function Questions({ onNext, onAnswerChange, questions, isLoading = false
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
       <div className="flex-none px-6 pt-14 pb-6">
-        <div className="flex items-center gap-2 mb-6">
-          {Array.from({ length: QUESTION_COUNT }).map((_, index) => (
-            <div
-              key={index}
-              className="h-1 flex-1 rounded-full"
-              style={{ background: index <= step ? '#2A7BD6' : '#E5E7EB' }}
-            />
-          ))}
-        </div>
+        <StepProgress progress={progress} />
         <div className="flex items-center gap-2 mb-4">
 	          <span
             className="rounded-full px-3 py-1"
@@ -198,7 +186,7 @@ export function Questions({ onNext, onAnswerChange, questions, isLoading = false
           disabled={!selected}
           className="w-full flex items-center justify-center rounded-xl text-white transition-all"
           style={{
-            background: selected ? '#2A7BD6' : '#E5E7EB',
+            background: selected ? '#0D2B6B' : '#E5E7EB',
             color: selected ? '#FFFFFF' : '#9CA3AF',
             height: '54px',
             fontSize: '17px',

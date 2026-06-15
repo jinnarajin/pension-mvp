@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { StepProgress } from './StepProgress';
 
 interface Props {
   onNext: () => void;
@@ -59,16 +60,8 @@ export function DataConsent({ onNext }: Props) {
     <div className="h-full flex flex-col overflow-y-auto bg-white">
       {/* Header */}
       <div className="flex-none px-6 pt-14 pb-6">
-        <div className="flex items-center gap-2 mb-6">
-          {[1, 2, 3, 4].map((i) => (
-            <div
-              key={i}
-              className="h-1 flex-1 rounded-full"
-              style={{ background: i === 1 ? '#2A7BD6' : '#E5E7EB' }}
-            />
-          ))}
-        </div>
-        <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '8px' }}>1단계 · 데이터 연결</p>
+        <StepProgress progress={1 / 3} />
+        <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '8px' }}>1단계 · 데이터 연동</p>
         <h2 style={{ fontSize: '24px', fontWeight: 700, color: '#1F2937', lineHeight: '140%' }}>
           데이터 연동에<br />동의해 주세요.
         </h2>
@@ -135,7 +128,7 @@ export function DataConsent({ onNext }: Props) {
           disabled={!agreed}
           className="w-full flex items-center justify-center rounded-xl text-white transition-all"
           style={{
-            background: agreed ? '#2A7BD6' : '#E5E7EB',
+            background: agreed ? '#0D2B6B' : '#E5E7EB',
             color: agreed ? '#FFFFFF' : '#9CA3AF',
             height: '54px',
             fontSize: '17px',

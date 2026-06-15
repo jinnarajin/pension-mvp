@@ -3,7 +3,6 @@ import { buildReportViewModel } from '../services/pensionViewModels';
 
 interface Props {
   onNext: () => void;
-  onBack: () => void;
   analysis?: AnalyzeResponse | null;
   dashboard?: ResultDashboardResponse | null;
   error?: string | null;
@@ -13,36 +12,21 @@ function formatWon(value: number) {
   return `${Math.abs(value).toLocaleString()}원`;
 }
 
-export function Report({ onNext, onBack, analysis = null, dashboard = null, error }: Props) {
+export function Report({ onNext, analysis = null, dashboard = null, error }: Props) {
   const report = buildReportViewModel(analysis, dashboard);
 
   return (
     <div className="h-full flex flex-col bg-white overflow-y-auto">
-      {/* Header */}
-      <div className="flex-none flex items-center gap-3 px-6 pt-14 pb-4">
-        <button
-          onClick={onBack}
-          className="flex items-center justify-center w-9 h-9 rounded-full"
-          style={{ background: '#F3F4F6' }}
-        >
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <path d="M11 5 L7 9 L11 13" stroke="#1F2937" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-        <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#1F2937' }}>분석 결과</h2>
-      </div>
-
-      <div className="flex-1 px-6 pb-8 space-y-5">
-        {/* Summary banner */}
-        <div
-          className="p-5 rounded-2xl"
-          style={{ background: 'linear-gradient(135deg, #0D2B6B, #2A7BD6)' }}
-        >
-          <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', marginBottom: '6px' }}>종합 진단</p>
+      {/* Summary banner */}
+      <div className="flex-none px-6 pt-12 pb-6" style={{ background: 'linear-gradient(160deg, #0D2B6B 0%, #1a4499 100%)' }}>
+        <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', marginBottom: '6px' }}>종합 진단</p>
           {report.hasProjection ? (
             <>
-              <p style={{ fontSize: '18px', fontWeight: 700, color: 'white', lineHeight: '150%' }}>
-                현재 계획대로라면<br />{report.shortageAgeLabel}에 생활비 부족이 시작될 수 있어요.
+              <p style={{ fontSize: 21, fontWeight: 700, color: '#FFF', lineHeight: '150%', marginBottom: 4 }}>
+                현재 계획대로라면<br />
+                <span style={{ color: '#37C27B' }}>
+                  {report.shortageAgeLabel}
+                </span>에 생활비 부족이 시작될 수 있어요.
               </p>
               <div className="flex items-center gap-2 mt-4">
                 <div className="rounded-full px-3 py-1" style={{ background: 'rgba(245,158,11,0.25)' }}>
@@ -58,12 +42,16 @@ export function Report({ onNext, onBack, analysis = null, dashboard = null, erro
               </div>
             </>
           ) : (
-            <p style={{ fontSize: '18px', fontWeight: 700, color: 'white', lineHeight: '150%' }}>
+            <p style={{ fontSize: 21, fontWeight: 700, color: '#FFF', lineHeight: '150%', marginBottom: 4 }}>
               아직 분석 결과가 없어요.<br />맞춤 질문을 완료하면 계산 결과가 표시됩니다.
             </p>
           )}
-        </div>
+        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.65)', marginTop: 6 }}>
+          맞춤 질문 답변과 자산 예측을 함께 반영했어요.
+        </p>
+      </div>
 
+      <div className="flex-1 px-6 pt-5 pb-8 space-y-5">
         {error && (
           <div className="p-4 rounded-2xl" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
             <p style={{ fontSize: '13px', color: '#92400E', lineHeight: '150%' }}>
@@ -195,7 +183,7 @@ export function Report({ onNext, onBack, analysis = null, dashboard = null, erro
         <button
           onClick={onNext}
           className="w-full flex items-center justify-center gap-2 rounded-xl text-white"
-          style={{ background: '#2A7BD6', height: '54px', fontSize: '17px', fontWeight: 700 }}
+          style={{ background: '#0D2B6B', height: '54px', fontSize: '17px', fontWeight: 700 }}
         >
           상세 분석 보기
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">

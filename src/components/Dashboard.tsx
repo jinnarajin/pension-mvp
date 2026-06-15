@@ -203,11 +203,8 @@ export function Dashboard({ onNext, dashboard = null, analysis = null }: Props) 
   return (
     <div className="h-full overflow-y-auto bg-white">
       <div className="px-6 pt-12 pb-6" style={{ background: 'linear-gradient(160deg, #0D2B6B 0%, #1a4499 100%)' }}>
-        <div className="flex items-center gap-2 mb-4">
-          <span className="rounded-full px-3 py-1" style={{ background: 'rgba(55,194,123,0.2)', color: '#37C27B', fontSize: 13, fontWeight: 600 }}>
-            분석 완료
-          </span>
-        </div>
+        <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#FFF', marginBottom: '16px' }}>수령 시뮬레이션</h2>
+        <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', marginBottom: '6px' }}>자산 예측 요약</p>
         <h2 style={{ fontSize: 21, fontWeight: 700, color: '#FFF', lineHeight: '150%', marginBottom: 4 }}>
           현재 계획대로라면<br />
           <span style={{ color: '#37C27B' }}>

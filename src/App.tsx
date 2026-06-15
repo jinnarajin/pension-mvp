@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import { Actions } from "./components/Actions";
 import { Analyzing } from "./components/Analyzing";
@@ -35,6 +35,8 @@ type Screen =
   | "report"
   | "actions";
 
+type IntroPhase = "ready" | "playing" | "done";
+
 const DEFAULT_INPUT: PensionInput = {
   nationalPension: 700000,
   retirementPension: 300000,
@@ -56,7 +58,104 @@ const screenLabels: Record<Screen, string> = {
   actions: '추천 행동',
 };
 
+const demoNarration: Record<Screen, { eyebrow: string; title: string; description: string; points: string[] }> = {
+  onboarding: {
+    eyebrow: '서비스 소개',
+    title: '노후 현금흐름 분석',
+    description: '연금과 자산 데이터를 기반으로 은퇴 이후 생활비 흐름을 미리 확인하는 서비스입니다.',
+    points: ['마이데이터 기반 자산 연결', '연령별 현금흐름 예측', '실행 가능한 준비 방법 제안'],
+  },
+  consent: {
+    eyebrow: '1단계',
+    title: '마이데이터 연동',
+    description: '연금, 자산, 지출 정보를 연결해 노후 현금흐름 분석의 기초 데이터를 준비합니다.',
+    points: ['국민연금 예상 수령액', '금융자산 및 대출 잔액', '월 생활비 흐름'],
+  },
+  snapshot: {
+    eyebrow: '2단계',
+    title: '현황 확인',
+    description: '연동된 데이터를 기반으로 1차적으로 계산을 해서 현재 자산과 예상 연금, 생활비를 확인하고 은퇴 목표를 입력합니다.',
+    points: ['현재 자산 현황 확인', '예상 월 연금 계산', '은퇴 후 목표 생활비 입력'],
+  },
+  questions: {
+    eyebrow: '3단계',
+    title: '맞춤 질문',
+    description: '사용자의 답변에 따라 LLM이 다음 질문을 다시 선택해 개인화된 분석 정확도를 높입니다.',
+    points: ['답변 기반 질문 재선택', '총 5개 맞춤 질문', '개인별 취약 요인 반영'],
+  },
+  analyzing: {
+    eyebrow: 'AI 분석',
+    title: '답변과 데이터를 종합',
+    description: '맞춤 질문 답변과 마이데이터를 함께 반영해 부족 시점, 현금흐름, 맞춤 행동을 계산합니다.',
+    points: ['질문 우선순위 재계산', '자산 변화 흐름 예측', '최종 결과 요약 생성'],
+  },
+  report: {
+    eyebrow: '결과 요약',
+    title: '분석 결과',
+    description: '월평균 현금흐름과 부족 예상 시점, 주요 원인을 한눈에 확인합니다.',
+    points: ['생활비 부족 예상 시점', '월평균 순 현금흐름', '분석에 영향을 준 주요 요인'],
+  },
+  dashboard: {
+    eyebrow: '상세 비교',
+    title: '수령 시뮬레이션',
+    description: '퇴직급여 수령 방식에 따라 자산 소진 시점과 월 현금흐름이 어떻게 달라지는지 비교합니다.',
+    points: ['일시금·10년·20년 수령 비교', '수령 방식별 월 현금흐름', '예상 자산 잔액 그래프'],
+  },
+  actions: {
+    eyebrow: '실행 제안',
+    title: '추천 행동',
+    description: '분석 결과를 바탕으로 지금 실행할 수 있는 준비 방법을 우선순위대로 제안합니다.',
+    points: ['우선순위별 실행 항목', '준비 전후 비교', '전문가 상담 연결'],
+  },
+};
+
+function DemoNarration({ screen }: { screen: Screen }) {
+  const narration = demoNarration[screen];
+
+  return (
+    <aside className="demo-narration" aria-label="시연 설명">
+      <p style={{ fontSize: 13, fontWeight: 800, color: '#2A7BD6', marginBottom: 10 }}>
+        {narration.eyebrow}
+      </p>
+      <h1 style={{ fontSize: 30, fontWeight: 800, color: '#0D2B6B', lineHeight: '130%', margin: 0 }}>
+        {narration.title}
+      </h1>
+      <p style={{ fontSize: 17, color: '#374151', lineHeight: '165%', marginTop: 18 }}>
+        {narration.description}
+      </p>
+      <div className="space-y-3" style={{ marginTop: 28 }}>
+        {narration.points.map((point) => (
+          <div key={point} className="flex items-center gap-3">
+            <span style={{ width: 8, height: 8, borderRadius: 8, background: '#37C27B', flex: '0 0 auto' }} />
+            <p style={{ fontSize: 15, fontWeight: 700, color: '#1F2937' }}>{point}</p>
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function DemoIntro({ phase, onStart }: { phase: IntroPhase; onStart: () => void }) {
+  if (phase === "done") return null;
+
+  return (
+    <div className={`demo-intro ${phase === "playing" ? "demo-intro-playing" : ""}`}>
+      {phase === "ready" ? (
+        <button className="demo-intro-start" onClick={onStart}>
+          시연 시작
+        </button>
+      ) : (
+        <div className="demo-intro-brand">
+          <img src="/dundeun-naeil-intro-logo.png" alt="든든내일 로고" className="demo-intro-logo" />
+          <h1 className="demo-intro-title">든든내일</h1>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
+  const [introPhase, setIntroPhase] = useState<IntroPhase>("ready");
   const [screen, setScreen] = useState<Screen>("onboarding");
   const [input, setInput] = useState<PensionInput>(DEFAULT_INPUT);
   const [mydata, setMydata] = useState<MyDataPayload | undefined>();
@@ -75,6 +174,18 @@ function App() {
   const navigate = useCallback((to: Screen) => {
     setScreen(to);
   }, []);
+
+  function startDemoIntro() {
+    setIntroPhase("playing");
+  }
+
+  useEffect(() => {
+    if (introPhase !== "playing") return;
+    const introTimer = window.setTimeout(() => {
+      setIntroPhase("done");
+    }, 2300);
+    return () => window.clearTimeout(introTimer);
+  }, [introPhase]);
 
   async function loadBackendViewData(
     payload: MyDataPayload,
@@ -270,6 +381,8 @@ function App() {
       className="flex items-center justify-center min-h-screen"
       style={{ background: '#E8EEF7' }}
     >
+      <DemoIntro phase={introPhase} onStart={startDemoIntro} />
+      <div className="demo-stage">
       <div
         className="relative flex flex-col"
         style={{
@@ -336,7 +449,7 @@ function App() {
             <Analyzing progress={analysisProgress} stageLabel={analysisStage} isComplete={!isAnalyzing} error={apiError} onNext={handleAnalyzingNext} />
           )}
           {screen === 'report' && (
-            <Report analysis={analysisResult} dashboard={resultDashboard} error={apiError} onNext={() => navigateResult('dashboard')} onBack={() => navigate('questions')} />
+            <Report analysis={analysisResult} dashboard={resultDashboard} error={apiError} onNext={() => navigateResult('dashboard')} />
           )}
           {screen === 'dashboard' && (
             <Dashboard dashboard={resultDashboard} analysis={analysisResult} onNext={() => navigate('actions')} />
@@ -393,6 +506,8 @@ function App() {
         <div className="flex-none flex items-center justify-center" style={{ height: '20px', background: 'white' }}>
           <div className="w-28 h-1 rounded-full" style={{ background: '#E5E7EB' }}/>
         </div>
+      </div>
+      <DemoNarration screen={screen} />
       </div>
 
       {/* Screen selector pills (for prototype navigation) */}

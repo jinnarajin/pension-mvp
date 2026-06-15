@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 interface Props {
   onNext: () => void;
@@ -16,15 +16,32 @@ const steps = [
 ];
 
 export function Analyzing({ onNext, isComplete = true, error, progress = 0, stageLabel = '분석을 준비하고 있어요.' }: Props) {
-  const displayProgress = progress;
+  const [displayProgress, setDisplayProgress] = useState(progress);
 
   useEffect(() => {
-    if (!isComplete) return;
+    const progressTimer = window.setInterval(() => {
+      setDisplayProgress((current) => {
+        if (current >= progress) {
+          window.clearInterval(progressTimer);
+          return current;
+        }
+
+        const gap = progress - current;
+        const nextStep = Math.max(2, Math.ceil(gap * 0.2));
+        return Math.min(progress, current + nextStep);
+      });
+    }, 70);
+
+    return () => window.clearInterval(progressTimer);
+  }, [progress]);
+
+  useEffect(() => {
+    if (!isComplete || displayProgress < 100) return;
     const finishTimer = window.setTimeout(() => {
       onNext();
-    }, 700);
+    }, 300);
     return () => window.clearTimeout(finishTimer);
-  }, [isComplete, onNext]);
+  }, [displayProgress, isComplete, onNext]);
 
   return (
     <div className="h-full flex flex-col items-center justify-center bg-white px-6">

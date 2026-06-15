@@ -10,13 +10,13 @@ export function Onboarding({ onNext }: Props) {
         className="flex-none flex flex-col items-center justify-end pb-10 pt-16 px-8"
         style={{ background: 'linear-gradient(160deg, #0D2B6B 0%, #1a4499 100%)', minHeight: '52%' }}
       >
-        {/* Logo mark */}
-        <div className="mb-5 flex items-center justify-center w-16 h-16 rounded-2xl bg-white/15">
-          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-            <path d="M6 26 L18 10 L30 26" stroke="#FFFFFF" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-            <path d="M11 26 L18 17 L25 26" stroke="#37C27B" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-            <circle cx="18" cy="8" r="2.5" fill="#37C27B"/>
-          </svg>
+        <div className="mb-5 flex items-center justify-center rounded-2xl bg-white/15" style={{ width: 82, height: 82 }}>
+          <img
+            src="/mono-logo.svg"
+            alt=""
+            aria-hidden="true"
+            style={{ width: '64px', height: '64px', objectFit: 'contain', display: 'block', transform: 'translate(-1px, -1px)' }}
+          />
         </div>
         <h1
           className="text-white text-center mb-2"
@@ -88,7 +88,7 @@ export function Onboarding({ onNext }: Props) {
             onClick={onNext}
             className="w-full flex items-center justify-center rounded-xl text-white transition-opacity active:opacity-80"
             style={{
-              background: '#2A7BD6',
+              background: '#0D2B6B',
               height: '54px',
               fontSize: '17px',
               fontWeight: 700,
